@@ -440,7 +440,6 @@ void PostResponse(const string request_id, const bool ok, const string result_js
       + "\"result\":" + (StringLen(result_json) > 0 ? result_json : "null")
       + "}";
 
-   string headers = "Content-Type: application/json\r\n";
    char payload[];
    char response[];
    string response_headers = "";
@@ -448,7 +447,17 @@ void PostResponse(const string request_id, const bool ok, const string result_js
    if(payload_len > 0)
       ArrayResize(payload, payload_len - 1);
    ResetLastError();
-   int status = WebRequest("POST", g_base_url + "/response?token=" + BridgeToken, headers, RequestTimeoutMs, payload, response, response_headers);
+   int status = WebRequest(
+      "POST",
+      g_base_url + "/response?token=" + BridgeToken,
+      "",
+      "",
+      RequestTimeoutMs,
+      payload,
+      ArraySize(payload),
+      response,
+      response_headers
+   );
    string response_body = CharArrayToString(response, 0, ArraySize(response), CP_UTF8);
    if(status == -1)
    {
