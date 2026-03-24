@@ -12,7 +12,7 @@ parameters:
   use_range_tp: true
 range_timeframe: H1
 risk:
-  lot_size: 0.1
+  lot_size: 0.01
   max_risk_percent: 2.0
 session:
   asian:
@@ -26,4 +26,4 @@ session:
     start_hour: 13
 symbols:
 - XAUUSD
-timeframe: M5
+timeframe: M1

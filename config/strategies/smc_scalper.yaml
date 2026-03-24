@@ -7,7 +7,7 @@ description: "Smart Money Concepts scalping with CHoCH, FVG, and Order Blocks"
 symbols:
   - XAUUSD
 
-timeframe: M15
+timeframe: M5
 magic_number: 789123
 
 parameters:
@@ -23,7 +23,7 @@ parameters:
   # Trade Management
   risk_reward: 2.0
   trailing_stop: true
-  trailing_pips: 50.0
+  trailing_pips: 20.0
 
   # Stop Loss
   use_atr_sl: true

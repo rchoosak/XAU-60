@@ -28,7 +28,7 @@ risk:
   stop_loss_pips: 100.0
   take_profit_pips: 200.0
   trailing_stop: false
-  trailing_pips: 50.0
+  trailing_pips: 20.0
   max_risk_percent: 2.0
   lot_size: 0.01
 
