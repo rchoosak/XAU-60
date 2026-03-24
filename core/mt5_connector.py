@@ -53,9 +53,9 @@ if _BACKEND_MODE == _MODE_NATIVE:
         raise RuntimeError("MT5_MODE=native requires Windows and the MetaTrader5 package.")
     import MetaTrader5 as mt5
 elif _BACKEND_MODE == _MODE_BRIDGE:
-    from .mt5_client import MT5Client
+    from .bridge_server import BridgeServer
 
-    mt5 = MT5Client(
+    mt5 = BridgeServer(
         host=app_config.mt5.bridge_host,
         port=app_config.mt5.bridge_port,
         token=app_config.mt5.bridge_token,

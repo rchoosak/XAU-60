@@ -15,6 +15,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from loguru import logger
 from types import SimpleNamespace
@@ -143,6 +144,7 @@ class _BridgeState:
 
 class _BridgeRequestHandler(BaseHTTPRequestHandler):
     server_version = "MT5Bridge/1.0"
+    protocol_version = "HTTP/1.1"
 
     @property
     def state(self) -> _BridgeState:
@@ -153,16 +155,28 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
+        self.wfile.flush()
+        self.close_connection = True
 
     def _send_json(self, status: int, payload: Dict[str, Any]) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
+        self.wfile.flush()
+        self.close_connection = True
+
+    def handle_expect_100(self) -> bool:
+        logger.debug("Bridge server: received Expect: 100-continue")
+        self.send_response_only(HTTPStatus.CONTINUE)
+        self.end_headers()
+        return True
 
     def _authorized(self, query: Dict[str, List[str]]) -> bool:
         provided = self.headers.get("X-MT5-Token") or query.get("token", [""])[0]
@@ -279,7 +293,7 @@ class MT5BridgeServer:
             self.state.release(request.request_id)
 
 
-class MT5Client:
+class BridgeServer:
     """
     Drop-in MT5-like client backed by the EA bridge.
     """
@@ -345,10 +359,10 @@ class MT5Client:
     def _set_error(self, code: int, message: str) -> None:
         self._last_error = (code, message)
 
-    def _call(self, action: str, **params: Any) -> Dict[str, Any]:
+    def _call(self, command: str, **params: Any) -> Dict[str, Any]:
         try:
             response = self.bridge.roundtrip(
-                action=action,
+                action=command,
                 params=params,
                 timeout_s=self.request_timeout / 1000.0,
             )

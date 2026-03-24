@@ -18,7 +18,7 @@ int OnInit()
       BridgeBaseUrl;
 
    EventSetMillisecondTimer(MathMax(PollIntervalMs, 250));
-   Print("mt5_server initialized. Add this URL to MT5 WebRequest allowlist: ", g_base_url);
+   Print("XAU60_Client initialized. Add this URL to MT5 WebRequest allowlist: ", g_base_url);
    return(INIT_SUCCEEDED);
 }
 
@@ -225,8 +225,8 @@ bool HandleOrderSend(const string request_body, string &result_json, string &err
    bool sent = OrderSend(request, result);
    result_json = "{"
       + "\"retcode\":" + IntegerToString((int)result.retcode) + ","
-      + "\"deal\":" + IntegerToString((int)result.deal) + ","
-      + "\"order\":" + IntegerToString((int)result.order) + ","
+      + "\"deal\":" + ULongToJson(result.deal) + ","
+      + "\"order\":" + ULongToJson(result.order) + ","
       + "\"volume\":" + DoubleToJson(result.volume) + ","
       + "\"price\":" + DoubleToJson(result.price) + ","
       + "\"bid\":" + DoubleToJson(result.bid) + ","
@@ -272,7 +272,7 @@ bool HandlePositionsGet(const string request_body, string &result_json, string &
       first = false;
 
       result_json += "{"
-         + "\"ticket\":" + IntegerToString((int)ticket) + ","
+         + "\"ticket\":" + ULongToJson(ticket) + ","
          + "\"time\":" + IntegerToString((int)PositionGetInteger(POSITION_TIME)) + ","
          + "\"type\":" + IntegerToString((int)PositionGetInteger(POSITION_TYPE)) + ","
          + "\"magic\":" + IntegerToString((int)PositionGetInteger(POSITION_MAGIC)) + ","
@@ -317,8 +317,8 @@ bool HandleHistoryDealsGet(const string request_body, string &result_json, strin
       first = false;
 
       result_json += "{"
-         + "\"ticket\":" + IntegerToString((int)deal_ticket) + ","
-         + "\"order\":" + IntegerToString((int)HistoryDealGetInteger(deal_ticket, DEAL_ORDER)) + ","
+         + "\"ticket\":" + ULongToJson(deal_ticket) + ","
+         + "\"order\":" + ULongToJson((ulong)HistoryDealGetInteger(deal_ticket, DEAL_ORDER)) + ","
          + "\"time\":" + IntegerToString((int)HistoryDealGetInteger(deal_ticket, DEAL_TIME)) + ","
          + "\"type\":" + IntegerToString((int)HistoryDealGetInteger(deal_ticket, DEAL_TYPE)) + ","
          + "\"magic\":" + IntegerToString((int)HistoryDealGetInteger(deal_ticket, DEAL_MAGIC)) + ","
@@ -556,4 +556,9 @@ string DoubleToJson(const double value)
 string BoolToJson(const bool value)
 {
    return value ? "true" : "false";
+}
+
+string ULongToJson(const ulong value)
+{
+   return (string)value;
 }
