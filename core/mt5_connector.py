@@ -2,19 +2,57 @@
 MetaTrader 5 Connection and API Wrapper.
 Handles all communication with the MT5 terminal.
 """
+import os
 import platform
+import importlib.util
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any, Tuple
+
 import pandas as pd
+from loguru import logger
+
 from utils.config import config as app_config
+from .strategy_base import Signal, Position
 
-_use_bridge = (
-    platform.system() != "Windows"
-    and app_config.mt5.bridge_enabled
-)
+_MODE_NATIVE = "native"
+_MODE_BRIDGE = "bridge"
+_MODE_MOCK = "mock"
 
-# Use native MT5 on Windows, the HTTP bridge when configured, otherwise the mock.
-if platform.system() == "Windows":
+
+def _normalized_mode() -> str:
+    raw_mode = (app_config.mt5.mode or "auto").strip().lower()
+    if raw_mode in {"live", "bridge"}:
+        return _MODE_BRIDGE
+    if raw_mode in {"mock", "tester", "backtest"}:
+        return _MODE_MOCK
+    if raw_mode == "native":
+        return _MODE_NATIVE
+
+    if platform.system() == "Windows":
+        return _MODE_NATIVE
+    if app_config.mt5.bridge_enabled:
+        return _MODE_BRIDGE
+    return _MODE_MOCK
+
+
+def _load_mock_module():
+    spec = importlib.util.spec_from_file_location(
+        "mt5_mock",
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "utils", "mt5_mock.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_BACKEND_MODE = _normalized_mode()
+
+if _BACKEND_MODE == _MODE_NATIVE:
+    if platform.system() != "Windows":
+        raise RuntimeError("MT5_MODE=native requires Windows and the MetaTrader5 package.")
     import MetaTrader5 as mt5
-elif _use_bridge:
+elif _BACKEND_MODE == _MODE_BRIDGE:
     from .mt5_client import MT5Client
 
     mt5 = MT5Client(
@@ -25,23 +63,7 @@ elif _use_bridge:
         poll_timeout=app_config.mt5.bridge_poll_timeout,
     )
 else:
-    # Mock MT5 for development on macOS/Linux
-    import sys
-    import os
-    # Import directly without going through package __init__
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "mt5_mock",
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), "utils", "mt5_mock.py")
-    )
-    mt5 = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mt5)
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import dataclass
-from loguru import logger
-
-from .strategy_base import Signal, Position
+    mt5 = _load_mock_module()
 
 
 @dataclass
@@ -106,6 +128,7 @@ class MT5Connector:
         """Initialize MT5 connector."""
         self._connected = False
         self._account_info: Optional[AccountInfo] = None
+        self.backend_mode = _BACKEND_MODE
 
     def connect(
         self,
@@ -133,6 +156,7 @@ class MT5Connector:
         if path:
             init_params["path"] = path
 
+        logger.info(f"Initializing MT5 backend: {self.backend_mode}")
         if not mt5.initialize(**init_params):
             error = mt5.last_error()
             logger.error(f"MT5 initialization failed: {error}")

@@ -237,6 +237,7 @@ class TradingBot:
         # Show config source
         print("[0] Configuration source:")
         mt5_config = self.config.get("mt5", {})
+        print(f"    ✓ MT5 Mode: {mt5_config.get('mode', 'auto')}")
         if mt5_config.get("login"):
             print(f"    ✓ MT5 Login: {mt5_config['login']}")
             print(f"    ✓ MT5 Server: {mt5_config.get('server', 'Not set')}")
@@ -253,6 +254,7 @@ class TradingBot:
             server=mt5_config.get("server"),
             path=mt5_config.get("path") or None
         ):
+            print(f"    ✓ Backend: {self.mt5.backend_mode}")
             account = self.mt5.get_account_info()
             if account:
                 print(f"    ✓ Connected to {account.server}")

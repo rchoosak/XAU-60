@@ -9,6 +9,7 @@ input int RequestTimeoutMs = 10000;
 
 string g_base_url = "";
 datetime g_last_processed = 0;
+datetime g_last_idle_log = 0;
 
 int OnInit()
 {
@@ -44,27 +45,46 @@ void PollBridge()
    if(status == -1)
    {
       int error = GetLastError();
-      if(error != 4014)
-         Print("Bridge poll failed. WebRequest error: ", error);
+      Print("Bridge poll failed. WebRequest error: ", error, " url=", url);
       return;
    }
 
    string body = CharArrayToString(response, 0, ArraySize(response), CP_UTF8);
    if(StringLen(body) == 0)
+   {
+      Print("Bridge poll returned empty body. HTTP status=", status);
       return;
+   }
 
    string status_value = GetLineValue(body, "status");
-   if(status_value != "ok")
+   if(status_value == "empty")
+   {
+      datetime now = TimeCurrent();
+      if(g_last_idle_log == 0 || now - g_last_idle_log >= 30)
+      {
+         Print("Bridge poll ok, no pending requests. HTTP status=", status);
+         g_last_idle_log = now;
+      }
       return;
+   }
+   if(status_value != "ok")
+   {
+      Print("Bridge poll returned unexpected payload. HTTP status=", status, " body=", body);
+      return;
+   }
 
    string request_id = GetLineValue(body, "request_id");
    string action = GetLineValue(body, "action");
    if(request_id == "" || action == "")
+   {
+      Print("Bridge poll missing request metadata. body=", body);
       return;
+   }
 
    string result_json = "";
    string error_message = "";
    bool ok = ExecuteAction(body, action, result_json, error_message);
+   Print("Processing bridge action: ", action, " request_id=", request_id, " ok=", ok);
    PostResponse(request_id, ok, result_json, error_message);
    g_last_processed = TimeCurrent();
 }

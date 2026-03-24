@@ -65,7 +65,7 @@ A modular, high-performance trading bot for MetaTrader 5 with a Streamlit web in
 pip install -r requirements.txt
 ```
 
-**Note:** MetaTrader5 package only works on Windows. For other platforms, use the backtesting and UI features.
+**Note:** MetaTrader5 package only works on Windows. On macOS/Linux the bot will use `mt5_mock` by default, or use `ea/mt5_server.mq5` if `MT5_BRIDGE_ENABLED=true`.
 
 ### 2. Configure Environment Variables
 
@@ -79,9 +79,16 @@ Edit `.env` with your settings:
 
 ```bash
 # MetaTrader 5
+MT5_MODE=auto
 MT5_LOGIN=your_account_number
 MT5_PASSWORD=your_password
 MT5_SERVER=YourBroker-Demo
+
+# MT5 bridge (enable this on macOS/Linux to talk to mt5_server.mq5)
+MT5_BRIDGE_ENABLED=false
+MT5_BRIDGE_HOST=0.0.0.0
+MT5_BRIDGE_PORT=8765
+MT5_BRIDGE_TOKEN=change-me
 
 # Telegram Alerts (optional)
 TELEGRAM_ENABLED=true
@@ -94,6 +101,23 @@ DISCORD_WEBHOOK_URL=your_webhook_url
 ```
 
 **Important:** Never commit `.env` to version control!
+
+### MT5 Bridge Mode
+
+If you want the Python bot on macOS/Linux to use a real MetaTrader 5 terminal running on Windows:
+
+1. Set `MT5_MODE=bridge` and `MT5_BRIDGE_ENABLED=true` in `.env`
+2. Keep `python main.py` running on the machine that hosts the bot
+3. Compile and attach [ea/mt5_server.mq5](/Users/choosak.r/Projects/XAU-60/ea/mt5_server.mq5) to a chart in MetaTrader 5 on Windows
+4. In MetaTrader 5, allow WebRequest to `http://<python-host>:8765`
+5. Set EA inputs `BridgeBaseUrl` and `BridgeToken` to match your `.env`
+
+### MT5 Modes
+
+- `MT5_MODE=bridge` uses `ea/mt5_server.mq5` and is intended for live/paper trading with a real MT5 terminal on Windows.
+- `MT5_MODE=mock` uses `utils/mt5_mock.py` and is intended for development, dry runs, and Python-side backtesting.
+- `MT5_MODE=tester` behaves the same as `mock` so MT5 Strategy Tester and Python backtests stay isolated from the live bridge.
+- `MT5_MODE=auto` keeps the old behavior: Windows uses native `MetaTrader5`; non-Windows uses the bridge only if `MT5_BRIDGE_ENABLED=true`, otherwise it uses the mock.
 
 ### 3. Run the Bot
 

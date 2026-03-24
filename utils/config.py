@@ -51,6 +51,7 @@ def get_env(key: str, default: Any = None, cast: type = str) -> Any:
 @dataclass
 class MT5Config:
     """MetaTrader 5 connection configuration."""
+    mode: str = field(default_factory=lambda: get_env("MT5_MODE", "auto"))
     login: int = field(default_factory=lambda: get_env("MT5_LOGIN", 0, int))
     password: str = field(default_factory=lambda: get_env("MT5_PASSWORD", ""))
     server: str = field(default_factory=lambda: get_env("MT5_SERVER", ""))
@@ -129,6 +130,7 @@ class Config:
         """Convert config to dictionary."""
         return {
             "mt5": {
+                "mode": self.mt5.mode,
                 "login": self.mt5.login,
                 "password": self.mt5.password,
                 "server": self.mt5.server,
