@@ -34,8 +34,8 @@ void OnTimer()
 
 void PollBridge()
 {
-   string headers = "X-MT5-Token: " + BridgeToken + "\r\n";
-   string url = g_base_url + "/poll?timeout_ms=" + IntegerToString(PollTimeoutMs);
+   string headers = "";
+   string url = g_base_url + "/poll?timeout_ms=" + IntegerToString(PollTimeoutMs) + "&token=" + BridgeToken;
 
    char post_data[];
    char response[];
@@ -440,13 +440,15 @@ void PostResponse(const string request_id, const bool ok, const string result_js
       + "\"result\":" + (StringLen(result_json) > 0 ? result_json : "null")
       + "}";
 
-   string headers = "Content-Type: application/json\r\nX-MT5-Token: " + BridgeToken + "\r\n";
+   string headers = "Content-Type: application/json\r\n";
    char payload[];
    char response[];
    string response_headers = "";
-   StringToCharArray(body, payload, 0, StringLen(body), CP_UTF8);
+   int payload_len = StringToCharArray(body, payload, 0, WHOLE_ARRAY, CP_UTF8);
+   if(payload_len > 0)
+      ArrayResize(payload, payload_len - 1);
    ResetLastError();
-   int status = WebRequest("POST", g_base_url + "/response", headers, RequestTimeoutMs, payload, response, response_headers);
+   int status = WebRequest("POST", g_base_url + "/response?token=" + BridgeToken, headers, RequestTimeoutMs, payload, response, response_headers);
    string response_body = CharArrayToString(response, 0, ArraySize(response), CP_UTF8);
    if(status == -1)
    {
@@ -454,7 +456,7 @@ void PostResponse(const string request_id, const bool ok, const string result_js
       return;
    }
 
-   Print("Bridge response posted. HTTP status=", status, " response=", response_body);
+   Print("Bridge response posted. HTTP status=", status, " last_error=", GetLastError(), " response=", response_body, " headers=", response_headers);
 }
 
 string RatesToJson(MqlRates &rates[], const int count)

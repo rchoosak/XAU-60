@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from loguru import logger
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -186,9 +187,11 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
         timeout_ms = int(query.get("timeout_ms", ["25000"])[0] or "25000")
         request = self.state.pop_for_worker(max(timeout_ms / 1000.0, 0.1))
         if request is None:
+            logger.debug("Bridge poll: no pending requests")
             self._send_text(200, "status=empty\n")
             return
 
+        logger.info(f"Bridge poll: dispatching action={request.action} request_id={request.request_id}")
         lines = [
             "status=ok",
             f"request_id={request.request_id}",
@@ -205,25 +208,31 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if not self._authorized(query):
+            logger.warning(f"Bridge response rejected: unauthorized path={parsed.path}")
             self._send_json(403, {"ok": False, "error": "unauthorized"})
             return
 
         if parsed.path != "/response":
+            logger.warning(f"Bridge response rejected: unknown path={parsed.path}")
             self._send_json(404, {"ok": False, "error": "not_found"})
             return
 
         content_length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(content_length)
+        logger.info(f"Bridge response received: bytes={content_length}")
         try:
             payload = json.loads(raw.decode("utf-8") or "{}")
         except json.JSONDecodeError:
+            logger.error(f"Bridge response invalid JSON: {raw!r}")
             self._send_json(400, {"ok": False, "error": "invalid_json"})
             return
 
         if not self.state.complete(payload):
+            logger.warning(f"Bridge response unknown request_id={payload.get('request_id')}")
             self._send_json(404, {"ok": False, "error": "unknown_request"})
             return
 
+        logger.info(f"Bridge response accepted: request_id={payload.get('request_id')}")
         self._send_json(200, {"ok": True})
 
     def log_message(self, format: str, *args: Any) -> None:
