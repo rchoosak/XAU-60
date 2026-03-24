@@ -56,6 +56,12 @@ class MT5Config:
     server: str = field(default_factory=lambda: get_env("MT5_SERVER", ""))
     path: str = field(default_factory=lambda: get_env("MT5_PATH", ""))
     timeout: int = field(default_factory=lambda: get_env("MT5_TIMEOUT", 60000, int))
+    bridge_enabled: bool = field(default_factory=lambda: get_env("MT5_BRIDGE_ENABLED", False, bool))
+    bridge_host: str = field(default_factory=lambda: get_env("MT5_BRIDGE_HOST", "0.0.0.0"))
+    bridge_port: int = field(default_factory=lambda: get_env("MT5_BRIDGE_PORT", 8765, int))
+    bridge_token: str = field(default_factory=lambda: get_env("MT5_BRIDGE_TOKEN", "change-me"))
+    bridge_timeout: int = field(default_factory=lambda: get_env("MT5_BRIDGE_TIMEOUT", 30000, int))
+    bridge_poll_timeout: int = field(default_factory=lambda: get_env("MT5_BRIDGE_POLL_TIMEOUT", 25000, int))
 
 
 @dataclass
@@ -128,6 +134,12 @@ class Config:
                 "server": self.mt5.server,
                 "path": self.mt5.path,
                 "timeout": self.mt5.timeout,
+                "bridge_enabled": self.mt5.bridge_enabled,
+                "bridge_host": self.mt5.bridge_host,
+                "bridge_port": self.mt5.bridge_port,
+                "bridge_token": self.mt5.bridge_token,
+                "bridge_timeout": self.mt5.bridge_timeout,
+                "bridge_poll_timeout": self.mt5.bridge_poll_timeout,
             },
             "alerts": {
                 "telegram": {

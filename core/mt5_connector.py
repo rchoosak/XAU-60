@@ -4,10 +4,26 @@ Handles all communication with the MT5 terminal.
 """
 import platform
 import pandas as pd
+from utils.config import config as app_config
 
-# Use mock MT5 on non-Windows platforms
+_use_bridge = (
+    platform.system() != "Windows"
+    and app_config.mt5.bridge_enabled
+)
+
+# Use native MT5 on Windows, the HTTP bridge when configured, otherwise the mock.
 if platform.system() == "Windows":
     import MetaTrader5 as mt5
+elif _use_bridge:
+    from .mt5_client import MT5Client
+
+    mt5 = MT5Client(
+        host=app_config.mt5.bridge_host,
+        port=app_config.mt5.bridge_port,
+        token=app_config.mt5.bridge_token,
+        request_timeout=app_config.mt5.bridge_timeout,
+        poll_timeout=app_config.mt5.bridge_poll_timeout,
+    )
 else:
     # Mock MT5 for development on macOS/Linux
     import sys
@@ -132,6 +148,12 @@ class MT5Connector:
 
         self._connected = True
         self._update_account_info()
+        if self._account_info is None:
+            error = mt5.last_error()
+            logger.error(f"MT5 account info unavailable after connect: {error}")
+            mt5.shutdown()
+            self._connected = False
+            return False
         logger.info(f"Connected to MT5: {self._account_info.server if self._account_info else 'Unknown'}")
         return True
 
