@@ -1,7 +1,7 @@
 #property strict
 #property description "HTTP polling bridge for the Python MT5 bot"
 
-input string BridgeBaseUrl = "http://127.0.0.1:8765";
+input string BridgeBaseUrl = "http://10.0.2.2:8876";
 input string BridgeToken = "change-me";
 input int PollIntervalMs = 1000;
 input int PollTimeoutMs = 25000;
