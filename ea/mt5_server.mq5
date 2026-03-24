@@ -447,8 +447,14 @@ void PostResponse(const string request_id, const bool ok, const string result_js
    StringToCharArray(body, payload, 0, StringLen(body), CP_UTF8);
    ResetLastError();
    int status = WebRequest("POST", g_base_url + "/response", headers, RequestTimeoutMs, payload, response, response_headers);
+   string response_body = CharArrayToString(response, 0, ArraySize(response), CP_UTF8);
    if(status == -1)
-      Print("Bridge response failed. WebRequest error: ", GetLastError());
+   {
+      Print("Bridge response failed. WebRequest error: ", GetLastError(), " body=", body);
+      return;
+   }
+
+   Print("Bridge response posted. HTTP status=", status, " response=", response_body);
 }
 
 string RatesToJson(MqlRates &rates[], const int count)
