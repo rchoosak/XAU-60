@@ -361,7 +361,8 @@ class MT5Connector:
         stop_loss: float = 0.0,
         take_profit: float = 0.0,
         magic: int = 0,
-        comment: str = ""
+        comment: str = "",
+        slippage: int = 10
     ) -> Tuple[bool, int]:
         """
         Place a market order.
@@ -374,6 +375,7 @@ class MT5Connector:
             take_profit: Take profit price (0 to disable)
             magic: Magic number for EA identification
             comment: Order comment
+            slippage: Maximum price slippage in points
 
         Returns:
             Tuple of (success, ticket_number)
@@ -401,6 +403,7 @@ class MT5Connector:
             "price": price,
             "sl": stop_loss,
             "tp": take_profit,
+            "deviation": slippage,
             "magic": magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,

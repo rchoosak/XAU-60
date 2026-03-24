@@ -44,7 +44,9 @@ class TradeExecutor:
         self,
         mt5: MT5Connector,
         risk_manager: RiskManager,
-        default_magic: int = 123456
+        default_magic: int = 123456,
+        default_lot_size: float = 0.01,
+        slippage: int = 10
     ):
         """
         Initialize trade executor.
@@ -53,10 +55,14 @@ class TradeExecutor:
             mt5: MT5 connector instance
             risk_manager: Risk manager instance
             default_magic: Default magic number for orders
+            default_lot_size: Default lot size from .env (fallback)
+            slippage: Maximum slippage in points from .env
         """
         self.mt5 = mt5
         self.risk_manager = risk_manager
         self.default_magic = default_magic
+        self.default_lot_size = default_lot_size
+        self.slippage = slippage
 
         self._trade_history: List[TradeRecord] = []
         self._active_trades: Dict[int, TradeRecord] = {}
@@ -99,8 +105,10 @@ class TradeExecutor:
             logger.warning(f"Invalid trade signal: {reason}")
             return None
 
-        # Calculate lot size if not specified or use risk-based sizing
+        # Calculate lot size: strategy YAML > .env DEFAULT_LOT_SIZE > risk-based
         lot_size = signal.lot_size
+        if lot_size <= 0:
+            lot_size = self.default_lot_size  # Fallback to .env DEFAULT_LOT_SIZE
         if lot_size <= 0:
             sl_pips = self._calculate_sl_pips(
                 signal.symbol, signal.entry_price, signal.stop_loss
@@ -119,6 +127,7 @@ class TradeExecutor:
             take_profit=signal.take_profit,
             magic=magic,
             comment=comment[:31],  # MT5 comment limit
+            slippage=self.slippage,
         )
 
         if success:

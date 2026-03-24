@@ -9,6 +9,7 @@ from datetime import datetime
 from core.strategy_base import StrategyBase, Signal, TradeSignal, Position
 from indicators.smc_utils import SMCAnalyzer
 from indicators.common import calculate_atr
+from utils.config import config as env_config
 
 
 class SMCScalper(StrategyBase):
@@ -78,6 +79,10 @@ class SMCScalper(StrategyBase):
         self.timeframe = config.get("timeframe", "M15")
         self.enabled = config.get("enabled", True)
         self.magic_number = config.get("magic_number", 789123)
+
+        # Risk settings
+        risk = config.get("risk", {})
+        self.lot_size = risk.get("lot_size", env_config.trading.default_lot_size)
 
         # Initialize SMC analyzer
         point = 0.1 if "XAU" in self.symbols[0] else 0.0001
@@ -152,6 +157,7 @@ class SMCScalper(StrategyBase):
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            lot_size=self.lot_size,
             comment=f"SMC_BUY_CHoCH_FVG",
             magic_number=self.magic_number
         )
@@ -199,6 +205,7 @@ class SMCScalper(StrategyBase):
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            lot_size=self.lot_size,
             comment=f"SMC_SELL_CHoCH_FVG",
             magic_number=self.magic_number
         )

@@ -9,6 +9,7 @@ from datetime import datetime
 from core.strategy_base import StrategyBase, Signal, TradeSignal, Position
 from indicators.trend_utils import TrendAnalyzer, TrendDirection
 from indicators.common import calculate_rsi, calculate_ema
+from utils.config import config as env_config
 
 
 class TrendBreakTrauma(StrategyBase):
@@ -84,6 +85,7 @@ class TrendBreakTrauma(StrategyBase):
         self.take_profit_pips = risk.get("take_profit_pips", 200.0)
         self.use_trailing_stop = risk.get("trailing_stop", False)
         self.trailing_pips = risk.get("trailing_pips", 50.0)
+        self.lot_size = risk.get("lot_size", env_config.trading.default_lot_size)
 
         # Session settings
         session = config.get("session", {})
@@ -182,6 +184,7 @@ class TrendBreakTrauma(StrategyBase):
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            lot_size=self.lot_size,
             comment="TrendBreak_BUY",
             magic_number=self.magic_number
         )
@@ -204,6 +207,7 @@ class TrendBreakTrauma(StrategyBase):
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            lot_size=self.lot_size,
             comment="TrendBreak_SELL",
             magic_number=self.magic_number
         )

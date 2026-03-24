@@ -152,7 +152,9 @@ class TradingBot:
         self.trade_executor = TradeExecutor(
             self.mt5,
             self.risk_manager,
-            default_magic=trading_config.get("default_magic_number", 123456)
+            default_magic=trading_config.get("default_magic_number", 123456),
+            default_lot_size=trading_config.get("default_lot_size", 0.01),
+            slippage=trading_config.get("slippage", 10),
         )
 
         # Load Strategies

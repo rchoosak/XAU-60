@@ -17,6 +17,7 @@ import pytz
 
 from core.strategy_base import StrategyBase, Signal, TradeSignal, Position
 from indicators.common import calculate_atr
+from utils.config import config as env_config
 
 
 class Killzone(Enum):
@@ -132,7 +133,7 @@ class CRTStrategy(StrategyBase):
 
         # Risk settings
         risk = config.get("risk", {})
-        self.lot_size = risk.get("lot_size", 0.1)
+        self.lot_size = risk.get("lot_size", env_config.trading.default_lot_size)
 
     def analyze(self, symbol: str, data: pd.DataFrame) -> Optional[TradeSignal]:
         """
