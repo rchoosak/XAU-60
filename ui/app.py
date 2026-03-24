@@ -21,9 +21,10 @@ st.set_page_config(
 st.markdown("""
 <style>
     .stMetric {
-        background-color: #f0f2f6;
+        background-color: var(--secondary-background-color);
         padding: 10px;
         border-radius: 5px;
+        border: 1px solid var(--faded-text-color);
     }
     .profit {
         color: #00c853;

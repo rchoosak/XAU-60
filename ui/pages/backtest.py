@@ -1,5 +1,6 @@
 """
 Backtest Page - Strategy backtesting interface.
+Uses the real BacktestEngine with historical data from MT5.
 """
 import streamlit as st
 import pandas as pd
@@ -11,295 +12,376 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from core.mt5_connector import MT5Connector
+from core.backtest_engine import BacktestEngine, BacktestResult
+from core.strategy_loader import StrategyLoader
+
 
 def render_backtest():
     """Render the backtesting page."""
     st.title("📈 Strategy Backtesting")
 
+    # Load available strategies from config
+    strategy_loader = StrategyLoader()
+    strategy_loader.discover_strategies()
+
+    config_dir = Path(__file__).parent.parent.parent / "config" / "strategies"
+    strategy_files = list(config_dir.glob("*.yaml")) if config_dir.exists() else []
+
+    strategies_info = {}
+    for f in strategy_files:
+        try:
+            with open(f, "r") as file:
+                config = yaml.safe_load(file)
+                name = config.get("name", f.stem)
+                strategies_info[name] = {
+                    "file_stem": f.stem,
+                    "config": config,
+                    "timeframe": config.get("timeframe", "M15"),
+                    "symbols": config.get("symbols", ["XAUUSD"]),
+                }
+        except Exception:
+            pass
+
     # Sidebar configuration
     with st.sidebar:
         st.subheader("Backtest Settings")
 
-        # Load available strategies
-        config_dir = Path(__file__).parent.parent.parent / "config" / "strategies"
-        strategy_files = list(config_dir.glob("*.yaml")) if config_dir.exists() else []
+        strategy_names = list(strategies_info.keys()) if strategies_info else ["No strategies found"]
+        selected_strategy = st.selectbox("Strategy", options=strategy_names)
 
-        strategies = {}
-        for f in strategy_files:
-            try:
-                with open(f, "r") as file:
-                    config = yaml.safe_load(file)
-                    strategies[config.get('name', f.stem)] = f.stem
-            except Exception:
-                pass
+        # Auto-fill symbol and timeframe from strategy config
+        strategy_info = strategies_info.get(selected_strategy, {})
+        default_symbols = strategy_info.get("symbols", ["XAUUSD"])
+        default_tf = strategy_info.get("timeframe", "M15")
 
-        selected_strategy = st.selectbox(
-            "Strategy",
-            options=list(strategies.keys()) if strategies else ["No strategies found"]
-        )
-
+        all_symbols = ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY"]
         symbol = st.selectbox(
             "Symbol",
-            options=["XAUUSD", "EURUSD", "GBPUSD", "USDJPY"]
+            options=all_symbols,
+            index=all_symbols.index(default_symbols[0])
+            if default_symbols and default_symbols[0] in all_symbols
+            else 0,
         )
 
+        tf_options = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
         timeframe = st.selectbox(
             "Timeframe",
-            options=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
-            index=2
+            options=tf_options,
+            index=tf_options.index(default_tf) if default_tf in tf_options else 2,
         )
 
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input(
-                "Start Date",
-                value=datetime.now() - timedelta(days=90)
+                "Start Date", value=datetime.now() - timedelta(days=90)
             )
         with col2:
-            end_date = st.date_input(
-                "End Date",
-                value=datetime.now()
-            )
+            end_date = st.date_input("End Date", value=datetime.now())
 
         initial_balance = st.number_input(
-            "Initial Balance ($)",
-            value=10000.0,
-            step=1000.0
+            "Initial Balance ($)", value=10000.0, step=1000.0
         )
 
         lot_size = st.number_input(
-            "Lot Size",
-            value=0.1,
-            step=0.01,
-            format="%.2f"
+            "Lot Size", value=0.01, step=0.01, format="%.2f"
         )
 
-        run_backtest = st.button("Run Backtest", type="primary", use_container_width=True)
+        spread_pips = st.number_input(
+            "Spread (pips)", value=2.0, step=0.5, format="%.1f"
+        )
+
+        run_backtest = st.button(
+            "Run Backtest", type="primary", use_container_width=True
+        )
 
     # Main content
     if run_backtest:
-        with st.spinner("Running backtest..."):
-            # Simulate backtest results
-            results = simulate_backtest_results(
-                initial_balance=initial_balance,
-                days=(end_date - start_date).days
-            )
+        if selected_strategy not in strategies_info:
+            st.error("No strategy selected.")
+            return
 
-            display_backtest_results(results)
+        _run_real_backtest(
+            strategy_name=selected_strategy,
+            strategy_loader=strategy_loader,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_date=datetime.combine(start_date, datetime.min.time()),
+            end_date=datetime.combine(end_date, datetime.max.time()),
+            initial_balance=initial_balance,
+            lot_size=lot_size,
+            spread_pips=spread_pips,
+        )
     else:
-        st.info("Configure backtest parameters and click 'Run Backtest' to start.")
-
-        # Show sample results preview
-        st.markdown("---")
-        st.subheader("Sample Results Preview")
-
-        results = simulate_backtest_results(initial_balance=10000, days=30)
-        display_backtest_results(results)
+        st.info(
+            "Configure backtest parameters in the sidebar and click "
+            "'Run Backtest' to start."
+        )
 
 
-def simulate_backtest_results(initial_balance: float, days: int) -> dict:
-    """Simulate backtest results for demo."""
-    import random
+# ------------------------------------------------------------------
+# Backtest runner
+# ------------------------------------------------------------------
 
-    # Generate equity curve
-    equity = [initial_balance]
-    for i in range(days):
-        change = random.uniform(-0.02, 0.03) * equity[-1]
-        equity.append(equity[-1] + change)
+def _run_real_backtest(
+    strategy_name: str,
+    strategy_loader: StrategyLoader,
+    symbol: str,
+    timeframe: str,
+    start_date: datetime,
+    end_date: datetime,
+    initial_balance: float,
+    lot_size: float,
+    spread_pips: float,
+):
+    """Run a real backtest using BacktestEngine and display results."""
 
-    # Generate trades
-    trades = []
-    num_trades = max(10, days // 3)
-    for i in range(num_trades):
-        pnl = random.uniform(-100, 200)
-        trades.append({
-            "date": datetime.now() - timedelta(days=random.randint(0, days)),
-            "symbol": "XAUUSD",
-            "type": random.choice(["BUY", "SELL"]),
-            "entry": round(2000 + random.uniform(-50, 50), 2),
-            "exit": round(2000 + random.uniform(-50, 50), 2),
-            "pnl": round(pnl, 2),
-            "pips": round(pnl / 10, 1)
-        })
+    # 1. Connect to MT5
+    with st.spinner("Connecting to MT5..."):
+        mt5 = MT5Connector()
+        if not mt5.connect():
+            st.error(
+                "Failed to connect to MT5. "
+                "Check your credentials in `.env` or bridge configuration."
+            )
+            return
 
-    # Calculate metrics
-    final_balance = equity[-1]
-    profits = [t['pnl'] for t in trades if t['pnl'] > 0]
-    losses = [t['pnl'] for t in trades if t['pnl'] < 0]
+    # 2. Load strategy
+    with st.spinner(f"Loading strategy: {strategy_name}..."):
+        strategy = strategy_loader.load_strategy(strategy_name)
+        if strategy is None:
+            st.error(f"Failed to load strategy: {strategy_name}")
+            mt5.disconnect()
+            return
 
-    # Drawdown
-    peak = equity[0]
-    max_dd = 0
-    for e in equity:
-        if e > peak:
-            peak = e
-        dd = (peak - e) / peak * 100
-        max_dd = max(max_dd, dd)
+    # 3. Run backtest
+    with st.spinner(
+        f"Running backtest: **{strategy_name}** on {symbol} {timeframe} "
+        f"({start_date.date()} → {end_date.date()})..."
+    ):
+        engine = BacktestEngine(mt5)
+        result = engine.run_backtest(
+            strategy=strategy,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            initial_balance=initial_balance,
+            lot_size=lot_size,
+            spread_pips=spread_pips,
+        )
 
-    return {
-        "equity_curve": equity,
-        "trades": sorted(trades, key=lambda x: x['date'], reverse=True),
-        "metrics": {
-            "initial_balance": initial_balance,
-            "final_balance": final_balance,
-            "total_profit": final_balance - initial_balance,
-            "total_profit_pct": (final_balance - initial_balance) / initial_balance * 100,
-            "total_trades": len(trades),
-            "winning_trades": len(profits),
-            "losing_trades": len(losses),
-            "win_rate": len(profits) / len(trades) * 100 if trades else 0,
-            "profit_factor": abs(sum(profits) / sum(losses)) if losses else 0,
-            "max_drawdown": max_dd,
-            "avg_win": sum(profits) / len(profits) if profits else 0,
-            "avg_loss": sum(losses) / len(losses) if losses else 0,
-            "sharpe_ratio": 1.5 + random.uniform(-0.5, 0.5)
-        }
-    }
+    mt5.disconnect()
+
+    # 4. Display results
+    if result is None:
+        st.error(
+            "Backtest failed — no historical data available for the selected period."
+        )
+        return
+
+    if result.total_trades == 0:
+        st.warning(
+            "Backtest completed but **no trades** were generated. "
+            "Try adjusting the date range or strategy parameters."
+        )
+
+    _display_results(result)
 
 
-def display_backtest_results(results: dict):
-    """Display backtest results."""
-    metrics = results["metrics"]
+# ------------------------------------------------------------------
+# Display helpers
+# ------------------------------------------------------------------
 
-    # Key metrics
+def _display_results(result: BacktestResult):
+    """Display BacktestResult in the UI."""
+
+    # ---- Key metrics row ----
     st.subheader("Performance Summary")
 
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
-        color = "normal" if metrics["total_profit"] >= 0 else "inverse"
-        st.metric(
-            "Total P&L",
-            f"${metrics['total_profit']:.2f}",
-            f"{metrics['total_profit_pct']:.2f}%"
-        )
+        pct = (result.total_profit / result.initial_balance) * 100 if result.initial_balance else 0
+        st.metric("Total P&L", f"${result.total_profit:,.2f}", f"{pct:+.2f}%")
 
     with col2:
-        st.metric("Win Rate", f"{metrics['win_rate']:.1f}%")
+        st.metric("Win Rate", f"{result.win_rate:.1f}%")
 
     with col3:
-        st.metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
+        st.metric("Profit Factor", f"{result.profit_factor:.2f}")
 
     with col4:
-        st.metric("Max Drawdown", f"{metrics['max_drawdown']:.2f}%")
+        st.metric("Max Drawdown", f"{result.max_drawdown_percent:.2f}%")
 
     with col5:
-        st.metric("Sharpe Ratio", f"{metrics['sharpe_ratio']:.2f}")
+        st.metric("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
 
     st.markdown("---")
 
-    # Equity curve chart
+    # ---- Equity curve ----
     st.subheader("Equity Curve")
 
-    dates = pd.date_range(
-        end=datetime.now(),
-        periods=len(results["equity_curve"]),
-        freq='D'
-    )
+    if result.equity_curve:
+        dates = pd.date_range(
+            start=result.start_date,
+            end=result.end_date,
+            periods=len(result.equity_curve),
+        )
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=dates,
-        y=results["equity_curve"],
-        mode='lines',
-        fill='tozeroy',
-        line=dict(color='#00c853', width=2),
-        fillcolor='rgba(0, 200, 83, 0.1)',
-        name='Equity'
-    ))
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=result.equity_curve,
+                mode="lines",
+                fill="tozeroy",
+                line=dict(color="#00c853", width=2),
+                fillcolor="rgba(0, 200, 83, 0.1)",
+                name="Equity",
+            )
+        )
 
-    # Add initial balance line
-    fig.add_hline(
-        y=metrics["initial_balance"],
-        line_dash="dash",
-        line_color="gray",
-        annotation_text="Initial Balance"
-    )
+        fig.add_hline(
+            y=result.initial_balance,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text="Initial Balance",
+        )
 
-    fig.update_layout(
-        height=400,
-        margin=dict(l=0, r=0, t=10, b=0),
-        xaxis_title="Date",
-        yaxis_title="Equity ($)"
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            height=400,
+            margin=dict(l=0, r=0, t=10, b=0),
+            xaxis_title="Date",
+            yaxis_title="Equity ($)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Two column layout for detailed stats and trades
+    # ---- Stats + Distribution ----
     col_left, col_right = st.columns([1, 1])
 
     with col_left:
         st.subheader("Detailed Statistics")
 
-        stats_df = pd.DataFrame({
-            "Metric": [
-                "Initial Balance",
-                "Final Balance",
-                "Total Profit",
-                "Total Trades",
-                "Winning Trades",
-                "Losing Trades",
-                "Win Rate",
-                "Average Win",
-                "Average Loss",
-                "Profit Factor",
-                "Max Drawdown",
-                "Sharpe Ratio"
-            ],
-            "Value": [
-                f"${metrics['initial_balance']:.2f}",
-                f"${metrics['final_balance']:.2f}",
-                f"${metrics['total_profit']:.2f}",
-                metrics['total_trades'],
-                metrics['winning_trades'],
-                metrics['losing_trades'],
-                f"{metrics['win_rate']:.1f}%",
-                f"${metrics['avg_win']:.2f}",
-                f"${metrics['avg_loss']:.2f}",
-                f"{metrics['profit_factor']:.2f}",
-                f"{metrics['max_drawdown']:.2f}%",
-                f"{metrics['sharpe_ratio']:.2f}"
-            ]
-        })
+        stats_df = pd.DataFrame(
+            {
+                "Metric": [
+                    "Strategy",
+                    "Symbol",
+                    "Timeframe",
+                    "Period",
+                    "Initial Balance",
+                    "Final Balance",
+                    "Total Profit",
+                    "Total Pips",
+                    "Total Trades",
+                    "Winning Trades",
+                    "Losing Trades",
+                    "Win Rate",
+                    "Average Win",
+                    "Average Loss",
+                    "Largest Win",
+                    "Largest Loss",
+                    "Profit Factor",
+                    "Max Drawdown",
+                    "Sharpe Ratio",
+                    "Consecutive Wins",
+                    "Consecutive Losses",
+                ],
+                "Value": [
+                    result.strategy_name,
+                    result.symbol,
+                    result.timeframe,
+                    f"{result.start_date.date()} → {result.end_date.date()}",
+                    f"${result.initial_balance:,.2f}",
+                    f"${result.final_balance:,.2f}",
+                    f"${result.total_profit:,.2f}",
+                    f"{result.total_profit_pips:.1f}",
+                    result.total_trades,
+                    result.winning_trades,
+                    result.losing_trades,
+                    f"{result.win_rate:.1f}%",
+                    f"${result.average_winner:,.2f}",
+                    f"${result.average_loser:,.2f}",
+                    f"${result.largest_winner:,.2f}",
+                    f"${result.largest_loser:,.2f}",
+                    f"{result.profit_factor:.2f}",
+                    f"{result.max_drawdown_percent:.2f}%",
+                    f"{result.sharpe_ratio:.2f}",
+                    result.max_consecutive_wins,
+                    result.max_consecutive_losses,
+                ],
+            }
+        )
 
         st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
     with col_right:
         st.subheader("Trade Distribution")
 
-        # P&L distribution
-        pnls = [t['pnl'] for t in results['trades']]
+        if result.trades:
+            pnls = [t.profit for t in result.trades]
 
-        fig_dist = go.Figure()
-        fig_dist.add_trace(go.Histogram(
-            x=pnls,
-            nbinsx=20,
-            marker_color='#2196f3'
-        ))
-        fig_dist.update_layout(
-            height=300,
-            margin=dict(l=0, r=0, t=10, b=0),
-            xaxis_title="P&L ($)",
-            yaxis_title="Count"
-        )
-        st.plotly_chart(fig_dist, use_container_width=True)
+            fig_dist = go.Figure()
+            fig_dist.add_trace(
+                go.Histogram(x=pnls, nbinsx=20, marker_color="#2196f3")
+            )
+            fig_dist.update_layout(
+                height=300,
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis_title="P&L ($)",
+                yaxis_title="Count",
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
+        else:
+            st.info("No trades to display.")
 
-    # Trade log
+    # ---- Trade log ----
     st.markdown("---")
     st.subheader("Trade Log")
 
-    trades_df = pd.DataFrame(results['trades'])
-    trades_df['date'] = pd.to_datetime(trades_df['date']).dt.strftime('%Y-%m-%d %H:%M')
+    if result.trades:
+        trades_data = []
+        for t in result.trades:
+            entry_str = (
+                t.entry_time.strftime("%Y-%m-%d %H:%M")
+                if hasattr(t.entry_time, "strftime")
+                else str(t.entry_time)
+            )
+            exit_str = (
+                t.exit_time.strftime("%Y-%m-%d %H:%M")
+                if hasattr(t.exit_time, "strftime")
+                else str(t.exit_time)
+            )
+            trades_data.append(
+                {
+                    "Entry Time": entry_str,
+                    "Exit Time": exit_str,
+                    "Type": t.signal.name,
+                    "Entry": f"{t.entry_price:.2f}",
+                    "Exit": f"{t.exit_price:.2f}",
+                    "SL": f"{t.stop_loss:.2f}",
+                    "TP": f"{t.take_profit:.2f}",
+                    "Lot": t.lot_size,
+                    "Pips": f"{t.profit_pips:.1f}",
+                    "P&L ($)": f"{t.profit:.2f}",
+                    "Exit Reason": t.exit_reason,
+                }
+            )
 
-    st.dataframe(trades_df, use_container_width=True, hide_index=True)
+        trades_df = pd.DataFrame(trades_data)
+        st.dataframe(trades_df, use_container_width=True, hide_index=True)
 
-    # Export button
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        csv = trades_df.to_csv(index=False)
-        st.download_button(
-            "Download Trades CSV",
-            csv,
-            "backtest_trades.csv",
-            "text/csv",
-            use_container_width=True
-        )
+        # Export
+        col1, col2, col3 = st.columns([1, 1, 2])
+        with col1:
+            csv = trades_df.to_csv(index=False)
+            st.download_button(
+                "Download Trades CSV",
+                csv,
+                "backtest_trades.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+    else:
+        st.info("No trades were generated during the backtest period.")
