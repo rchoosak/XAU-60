@@ -1,0 +1,39 @@
+name: "Bollinger Reversion"
+version: "1.0.0"
+enabled: true
+description: "Mean reversion strategy for sideways markets using Bollinger Bands and RSI"
+
+symbols:
+  - XAUUSD
+
+timeframe: M15
+magic_number: 789555
+
+parameters:
+  # Bollinger Bands Settings
+  bb_period: 20
+  bb_std_dev: 2.0
+  
+  # RSI Settings (Filter for Extreme Reversals)
+  rsi_period: 14
+  rsi_overbought: 70.0
+  rsi_oversold: 30.0
+
+risk:
+  stop_loss_pips: 100.0
+  take_profit_pips: 300.0  # Fallback TP if mid band is too close
+  use_dynamic_tp: true     # TP will adapt to the Middle Band (Mean Reversion)
+  trailing_stop: false
+  trailing_pips: 30.0
+  max_risk_percent: 2.0
+  lot_size: 0.01
+
+session:
+  use_time_filter: true
+  start_hour: 2            # Asian session is typically sideways (02:00 MT5 -> 07:00 Thai)
+  end_hour: 10             # Stops trading before London volume picks up heavily
+  trade_friday: true
+
+alerts:
+  telegram: true
+  discord: true
