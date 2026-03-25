@@ -4,144 +4,121 @@ Dashboard Page - Live trading overview.
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime, timedelta
-import sys
+from datetime import datetime
+import json
+import time
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
 def render_dashboard():
     """Render the dashboard page."""
     st.title("📊 Trading Dashboard")
 
+    state_file = Path("data/live_state.json")
+    state = {}
+    is_live = False
+
+    try:
+        if state_file.exists():
+            with open(state_file, "r") as f:
+                state = json.load(f)
+            
+            # Check if the file was updated recently (e.g., last 30 seconds)
+            last_updated = state.get("last_updated", 0)
+            if time.time() - last_updated < 30:
+                is_live = True
+    except Exception as e:
+        st.error(f"Error reading state file: {e}")
+
     # Top metrics row
     col1, col2, col3, col4, col5 = st.columns(5)
+    
+    acc = state.get("account_info", {})
+    pos = state.get("positions", [])
+    trades = state.get("recent_trades", [])
+
+    if not is_live:
+        st.warning("⚠️ **Bot is currently OFFLINE or State is stale.** (Start `python main.py` to see live metrics)")
+        balance = 0.0
+        equity = 0.0
+        open_pnl = 0.0
+        margin_level = 0.0
+    else:
+        st.success("🟢 **Bot is LIVE and syncing data.**")
+        balance = acc.get("balance", 0.0)
+        equity = acc.get("equity", 0.0)
+        open_pnl = sum(p.get("profit", 0.0) for p in pos)
+        margin_level = acc.get("margin_level", 0.0)
+
+    # Calculate today's P&L approximately from recent trades
+    today_pnl = 0.0
+    # In a full implementation, you'd filter history_deals_get by today. 
 
     with col1:
-        st.metric("Balance", "$10,450.00", "+$450.00")
+        st.metric("Balance", f"${balance:,.2f}")
 
     with col2:
-        st.metric("Equity", "$10,520.00", "+$70.00")
+        eq_diff = equity - balance
+        st.metric("Equity", f"${equity:,.2f}", f"{eq_diff:+,.2f}" if eq_diff != 0 else None)
 
     with col3:
-        st.metric("Open P&L", "+$70.00", "0.67%")
+        st.metric("Open P&L", f"${open_pnl:+,.2f}", f"{(open_pnl/balance*100):+.2f}%" if balance else "0.00%")
 
     with col4:
-        st.metric("Today's P&L", "+$185.00", "1.8%")
+        st.metric("Margin Level", f"{margin_level:,.2f}%" if margin_level > 0 else "N/A")
 
     with col5:
-        st.metric("Win Rate", "68%", "+3%")
+        st.metric("Open Positions", str(len(pos)))
 
     st.markdown("---")
 
-    # Two column layout
     col_left, col_right = st.columns([2, 1])
 
     with col_left:
-        # Equity curve
-        st.subheader("Equity Curve")
-
-        # Sample data
-        dates = pd.date_range(start=datetime.now() - timedelta(days=30), end=datetime.now(), freq='D')
-        equity = [10000 + i * 15 + (i % 5) * 10 - (i % 3) * 5 for i in range(len(dates))]
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=dates,
-            y=equity,
-            mode='lines',
-            fill='tozeroy',
-            line=dict(color='#00c853', width=2),
-            fillcolor='rgba(0, 200, 83, 0.1)'
-        ))
-        fig.update_layout(
-            height=300,
-            margin=dict(l=0, r=0, t=10, b=0),
-            xaxis_title="Date",
-            yaxis_title="Equity ($)"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
         # Open positions
-        st.subheader("Open Positions")
+        st.subheader(f"Open Positions ({len(pos)})")
 
-        positions_data = {
-            "Ticket": [12345, 12346],
-            "Symbol": ["XAUUSD", "XAUUSD"],
-            "Type": ["BUY", "SELL"],
-            "Volume": [0.02, 0.01],
-            "Entry": [2015.50, 2018.30],
-            "Current": [2017.80, 2016.50],
-            "P&L": ["+$46.00", "+$18.00"],
-            "Strategy": ["SMC Scalper", "Trend Break"]
-        }
-
-        if positions_data["Ticket"]:
-            df = pd.DataFrame(positions_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+        if is_live and pos:
+            pos_data = []
+            for p in pos:
+                pos_data.append({
+                    "Ticket": p.get("ticket"),
+                    "Symbol": p.get("symbol"),
+                    "Type": "BUY" if p.get("type") == 0 else "SELL",
+                    "Volume": p.get("volume"),
+                    "Entry": p.get("price_open"),
+                    "Current": p.get("price_current"),
+                    "P&L": f"${p.get('profit', 0.0):+,.2f}",
+                })
+            st.dataframe(pd.DataFrame(pos_data), use_container_width=True, hide_index=True)
         else:
             st.info("No open positions")
 
     with col_right:
         # Risk status
-        st.subheader("Risk Status")
+        st.subheader("Account Info")
 
-        risk_data = {
-            "Metric": ["Daily Loss", "Drawdown", "Open Positions", "Margin Level"],
-            "Current": ["1.2%", "3.5%", "2/5", "850%"],
-            "Limit": ["5.0%", "20.0%", "5", "150%"],
-            "Status": ["🟢", "🟢", "🟢", "🟢"]
-        }
-        st.dataframe(pd.DataFrame(risk_data), use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-
-        # Recent trades
-        st.subheader("Recent Trades")
-
-        trades = [
-            {"time": "14:32", "symbol": "XAUUSD", "type": "BUY", "pnl": "+$32.50"},
-            {"time": "12:15", "symbol": "XAUUSD", "type": "SELL", "pnl": "-$12.00"},
-            {"time": "10:45", "symbol": "XAUUSD", "type": "BUY", "pnl": "+$45.00"},
-            {"time": "09:20", "symbol": "EURUSD", "type": "SELL", "pnl": "+$28.00"},
-        ]
-
-        for trade in trades:
-            color = "green" if "+" in trade["pnl"] else "red"
-            st.markdown(
-                f"**{trade['time']}** - {trade['symbol']} {trade['type']} "
-                f"<span style='color:{color}'>{trade['pnl']}</span>",
-                unsafe_allow_html=True
-            )
+        if is_live:
+            st.write(f"**Broker:** {acc.get('company', 'N/A')}")
+            st.write(f"**Server:** {acc.get('server', 'N/A')}")
+            st.write(f"**Currency:** {acc.get('currency', 'USD')}")
+            st.write(f"**Leverage:** 1:{acc.get('leverage', 1)}")
+            st.write(f"**Free Margin:** ${acc.get('margin_free', 0.0):,.2f}")
 
         st.markdown("---")
 
-        # Strategy performance
-        st.subheader("Strategy Performance")
+        # Recent trades log
+        st.subheader("Recent Signals Executed")
+        
+        if is_live and trades:
+            for t in reversed(trades[-5:]): # show last 5
+                st.markdown(
+                    f"**{t.get('open_time')}** - {t.get('symbol')} {t.get('signal')} "
+                    f"`{t.get('strategy')}` (Lot: {t.get('lot_size')})"
+                )
+        else:
+            st.info("No recent trades")
 
-        strategy_perf = {
-            "Strategy": ["SMC Scalper", "Trend Break"],
-            "Trades": [45, 23],
-            "Win %": ["72%", "61%"],
-            "P&L": ["+$680", "+$245"]
-        }
-        st.dataframe(pd.DataFrame(strategy_perf), use_container_width=True, hide_index=True)
-
-    # Bottom: Trade log
-    st.markdown("---")
-    st.subheader("Trade History")
-
-    history_data = {
-        "Date": ["2024-01-15", "2024-01-15", "2024-01-14", "2024-01-14", "2024-01-13"],
-        "Symbol": ["XAUUSD", "XAUUSD", "XAUUSD", "EURUSD", "XAUUSD"],
-        "Type": ["BUY", "SELL", "BUY", "SELL", "BUY"],
-        "Entry": [2015.50, 2020.30, 2010.00, 1.08520, 2005.00],
-        "Exit": [2018.20, 2018.50, 2015.50, 1.08420, 2010.00],
-        "P&L": ["+$54.00", "+$36.00", "+$110.00", "+$25.00", "+$100.00"],
-        "Strategy": ["SMC Scalper", "SMC Scalper", "Trend Break", "Trend Break", "SMC Scalper"]
-    }
-
-    df_history = pd.DataFrame(history_data)
-    st.dataframe(df_history, use_container_width=True, hide_index=True)
+    # Add a manual refresh button
+    if st.button("Refresh Dashboard"):
+        st.rerun()

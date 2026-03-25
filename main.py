@@ -6,6 +6,8 @@ import sys
 import time
 import signal
 import argparse
+import json
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -181,8 +183,16 @@ class TradingBot:
         logger.info("Trading bot started. Press Ctrl+C to stop.")
 
         try:
+            last_export = 0
             while self.running:
                 self._tick()
+                
+                # Export live state every 5 seconds for Dashboard
+                now = time.time()
+                if now - last_export >= 5:
+                    self._export_state()
+                    last_export = now
+                    
                 time.sleep(check_interval)
         except Exception as e:
             logger.error(f"Error in main loop: {e}")
@@ -218,6 +228,43 @@ class TradingBot:
             self.trade_executor.manage_positions(strategies)
         except Exception as e:
             logger.error(f"Error managing positions: {e}")
+
+    def _export_state(self):
+        """Export live state to JSON for Dashboard."""
+        try:
+            os.makedirs("data", exist_ok=True)
+            
+            acc_info = self.mt5.get_account_info()
+            positions = self.mt5.get_positions()
+            
+            acc_dict = acc_info.__dict__ if hasattr(acc_info, "__dict__") else {}
+            pos_list = [p.__dict__ for p in (positions or []) if hasattr(p, "__dict__")]
+            
+            trades = []
+            if hasattr(self, "trade_executor") and hasattr(self.trade_executor, "_trade_history"):
+                for t in self.trade_executor._trade_history[-20:]:  # last 20
+                    trades.append({
+                        "ticket": getattr(t, "ticket", 0),
+                        "symbol": getattr(t, "symbol", ""),
+                        "signal": t.signal.name if hasattr(t, "signal") else str(getattr(t, "signal", "")),
+                        "entry_price": getattr(t, "entry_price", 0),
+                        "lot_size": getattr(t, "lot_size", 0),
+                        "strategy": getattr(t, "strategy", ""),
+                        "open_time": str(getattr(t, "open_time", "")),
+                    })
+                
+            state = {
+                "last_updated": time.time(),
+                "account_info": acc_dict,
+                "positions": pos_list,
+                "recent_trades": trades
+            }
+            
+            with open("data/live_state.json", "w") as f:
+                json.dump(state, f)
+                
+        except Exception as e:
+            logger.error(f"Failed to export state: {e}")
 
     def shutdown(self):
         """Cleanup and shutdown."""
