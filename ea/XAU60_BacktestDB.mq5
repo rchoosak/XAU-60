@@ -5,10 +5,10 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Choosak.R"
 #property link      "https://www.mql5.com"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 #property description "Exports historical bar data to CSV for Parquet conversion"
-#property description "Updated: Auto-detect range if start/end is 0"
+#property description "Optimized for Strategy Tester range detection"
 
 //--- input parameters
 input string          InpSymbol = "XAUUSD";      // Symbol
@@ -21,18 +21,37 @@ input datetime        InpEnd = 0;                // End Date (0 = Auto)
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("XAU60_BacktestDB: Starting data export...");
+   Print("XAU60_BacktestDB: Starting initialization...");
    
+   // 1. Symbol Validation
+   if(!SymbolSelect(InpSymbol, true))
+   {
+      Print("Error: Symbol ", InpSymbol, " not found or not selectable.");
+      return(INIT_FAILED);
+   }
+
+   // 2. Check History Availability
+   int total_bars = Bars(InpSymbol, InpTimeframe);
+   Print("Total bars available for ", InpSymbol, " (", EnumToString(InpTimeframe), "): ", total_bars);
+   
+   if(total_bars <= 0)
+   {
+      Print("Waiting for history synchronization...");
+      // In Tester, we might need to "touch" the data to trigger loading
+      datetime dummy[];
+      CopyTime(InpSymbol, InpTimeframe, 0, 1, dummy);
+      total_bars = Bars(InpSymbol, InpTimeframe);
+      Print("Bars after sync attempt: ", total_bars);
+   }
+
    datetime start = InpStart;
    datetime end = InpEnd;
    
-   // 1. Resolve Auto Dates
+   // 3. Resolve Auto Dates
    if(end == 0) end = TimeCurrent();
    if(start == 0)
    {
-      // Find the earliest available bar
       datetime times[];
-      int total_bars = Bars(InpSymbol, InpTimeframe);
       if(total_bars > 0 && CopyTime(InpSymbol, InpTimeframe, total_bars - 1, 1, times) > 0)
       {
          start = times[0];
@@ -43,21 +62,19 @@ int OnInit()
       }
    }
 
-   // 2. Data Validation
-   if(start >= end)
-   {
-      Print("Error: Start Date must be before End Date.");
-      return(INIT_FAILED);
-   }
+   Print("Requested Range: ", TimeToString(start), " to ", TimeToString(end));
 
-   // 3. Fetch Historical Data
+   // 4. Fetch Historical Data
    MqlRates rates[];
    ArraySetAsSeries(rates, false);
    
+   ResetLastError();
    int copied = CopyRates(InpSymbol, InpTimeframe, start, end, rates);
    if(copied <= 0)
    {
-      Print("Error: No data found for ", InpSymbol, " (", EnumToString(InpTimeframe), ") in the specified range.");
+      int error = GetLastError();
+      Print("Error: No data found for ", InpSymbol, " in range. CopyRates returned: ", copied, " Error Code: ", error);
+      if(error == 4401) Print("Hint: History not found. Try scrolling the chart back manually or use Strategy Tester.");
       return(INIT_FAILED);
    }
    
@@ -65,10 +82,10 @@ int OnInit()
    datetime actual_start = rates[0].time;
    datetime actual_end = rates[copied-1].time;
    
-   Print("XAU60_BacktestDB: Fetched ", copied, " bars.");
-   Print("Data Range: ", TimeToString(actual_start), " to ", TimeToString(actual_end));
+   Print("XAU60_BacktestDB: Successfully fetched ", copied, " bars.");
+   Print("Final Data Range: ", TimeToString(actual_start), " to ", TimeToString(actual_end));
 
-   // 4. Define Filename
+   // 5. Define Filename
    string tf_name = EnumToString(InpTimeframe);
    string tf_str = StringSubstr(tf_name, 7); // Remove PERIOD_
    
@@ -79,7 +96,7 @@ int OnInit()
    
    string csv_filename = StringFormat("%s_%s_%s_%s.csv", InpSymbol, tf_str, start_str, end_str);
    
-   // 5. Write to CSV
+   // 6. Write to CSV
    int handle = FileOpen(csv_filename, FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
    if(handle == INVALID_HANDLE)
    {
@@ -110,7 +127,7 @@ int OnInit()
    Print("CSV Filename: ", csv_filename);
    Print("Location: ", data_path, "\\MQL5\\Files\\");
    
-   // 6. Parquet Note
+   // 7. Parquet Note
    string parquet_name = StringFormat("%s_%s_%s-%s.parquet", InpSymbol, tf_str, start_str, end_str);
    Print("To convert to Parquet, run:");
    Print("python3 scripts/csv_to_parquet.py --input \"MQL5/Files/", csv_filename, "\" --output \"data/backtest-db/", parquet_name, "\"");
@@ -120,19 +137,5 @@ int OnInit()
    return(INIT_SUCCEEDED);
 }
 
-//+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   Print("XAU60_BacktestDB: Deinitialized.");
-}
-
-//+------------------------------------------------------------------+
-//| Expert tick function                                             |
-//+------------------------------------------------------------------+
-void OnTick()
-{
-   // Handled in OnInit
-}
-//+------------------------------------------------------------------+
+void OnDeinit(const int reason) { Print("XAU60_BacktestDB: Deinitialized."); }
+void OnTick() { }
