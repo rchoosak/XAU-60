@@ -12,9 +12,9 @@
 
 //--- input parameters
 input string          InpSymbol = "XAUUSD";      // Symbol
-input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M5;  // Timeframe
-input datetime        InpStart = 0;              // Start Date (0 = Auto)
-input datetime        InpEnd = 0;                // End Date (0 = Auto)
+input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M1;  // Timeframe
+input datetime        InpStart = D'2020.01.01';  // Start Date (0 = Auto)
+input datetime        InpEnd = D'2026.03.24';    // End Date (0 = Auto)
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
