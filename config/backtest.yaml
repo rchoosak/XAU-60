@@ -1,9 +1,52 @@
-mode: real
-execution: bot
+# ==========================================
+# COMPREHENSIVE BACKTEST CONFIGURATION
+# ==========================================
+
+# 1. DATA PARAMETERS
+mode: random                   # [real | random]
 symbol: XAUUSD
 timeframe: M15
 start: "2024-01-01"
 end: "2026-03-25"
+data_path: data/backtest-db
+lookback: 100                # Bars to provide to strategy for analysis
+warmup: 200                  # Initial bars to skip before trading
+
+# 2. EXECUTION MODE
+execution: bot               # [strategy | bot]
 strategies: "bollinger_reversion,smc_scalper"
-spread_pips: 2.0
+
+# 3. TRADING / RISK PARAMETERS
 initial_balance: 10000.0
+risk_per_trade: 0.01         # 1% risk per trade (auto lot calculation)
+max_open_trades: 3
+lot_size: 0.1                # Fallback if risk calculation not possible
+spread_pips: 2.0
+commission: 7.0              # $7 per lot round turn
+slippage: 0.0001
+
+# 4. POSITION MANAGEMENT
+use_trailing_stop: true
+trailing_stop_pips: 50.0
+tp_multiplier: 1.0           # Multiplier for strategy's TP
+sl_multiplier: 1.0           # Multiplier for strategy's SL
+
+# 5. BOT PARAMETERS (Only for execution: bot)
+aggregation: majority        # [majority | weighted | priority]
+strategy_weights:            # For 'weighted' aggregation
+  "Bollinger Reversion": 1.0
+  "SMC Scalper": 1.5
+strategy_priority:           # For 'priority' aggregation
+  - smc_scalper
+  - bollinger_reversion
+
+# 6. RANDOM MODE PARAMETERS (Only for mode: random)
+random_type: ohlcv           # [ohlcv | signal]
+random_volatility: 0.01      # Price volatility
+random_trade_prob: 0.1       # Prob of signal if random_type: signal
+
+# 7. OUTPUT / LOGGING
+save_trades: true
+output: trades.csv
+log_signals: true              # Log entry/exit details
+parallel: false              # Run multiple timeframes in parallel

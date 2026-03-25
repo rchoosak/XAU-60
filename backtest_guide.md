@@ -1,105 +1,61 @@
-# Local Backtesting System Guide
+# MT5 Local Backtesting System Guide
 
-This system provides a fully offline backtesting infrastructure for MT5 trading strategies. It uses Parquet files for data storage and supports multi-strategy aggregation.
+A robust, offline-first system for testing MT5 trading strategies using local Parquet data.
 
-## 1. Data Sync Tool
+## 1. Quick Start
 
-Before running a backtest, you must sync data from MT5 to your local database.
-
-**Script**: `scripts/sync_data.py`
-
-**Usage**:
+### Data Sync
+Sync historical data from MT5 to your local machine.
 ```bash
-python scripts/sync_data.py --symbol XAUUSD --timeframe M5 --start 2010-01-01
+python3 scripts/sync_data.py --symbol XAUUSD --timeframe M15 --start 2024-01-01
 ```
 
-### Key Features:
-- **Chunking**: M1 data is fetched in weekly chunks, while higher timeframes use monthly chunks. This prevents API timeouts and memory issues.
-- **Resumable**: If a sync is interrupted, running the same command will resume from the last timestamp found in the local file.
-- **Performance**: Uses `pandas` and `pyarrow` for efficient storage and retrieval.
-
----
-
-## 2. Backtest Execution
-
-Run backtests using the unified runner script.
-
-**Script**: `scripts/run_backtest.py`
-
-### Strategy Mode (Single Strategy)
-Runs a single strategy against historical data.
-
-```bash
-python3 scripts/run_backtest.py \
-  --mode real \
-  --execution strategy \
-  --strategy "SMC Scalper" \
-  --symbol XAUUSD \
-  --timeframe M15
-```
-
-### Config File Mode (Recommended)
-You can also store all parameters in a YAML file and run it with the `-f` flag.
-
-**Example Config (`config/backtest.yaml`)**:
-```yaml
-mode: real
-execution: bot
-symbol: XAUUSD
-timeframe: M15
-start: "2024-01-01"
-strategies: "SMC Scalper,Bollinger Reversion"
-```
-
-**Usage**:
+### Run Backtest (Config File)
+The recommended way to run backtests is using a YAML configuration file.
 ```bash
 python3 scripts/run_backtest.py -f config/backtest.yaml
 ```
 
-### Bot Mode (Multi-Strategy)
-```bash
-python3 scripts/run_backtest.py \
-  --mode real \
-  --execution bot \
-  --strategies "SMC Scalper,Bollinger Reversion" \
-  --symbol XAUUSD \
-  --timeframe M15
-```
+---
+
+## 2. Configuration Parameters (`config/backtest.yaml`)
+
+### Data Parameters
+- `mode`: `real` (Parquet) or `random` (Synthetic).
+- `data_path`: Directory for Parquet files (default: `data/backtest-db`).
+- `lookback`: Number of bars provided to the strategy for analysis (default: 100).
+- `warmup`: Number of bars to skip at the start of the data (default: 200).
+
+### Trading & Risk
+- `initial_balance`: Initial account balance (default: 10000.0).
+- `risk_per_trade`: Percentage of balance to risk (0.01 = 1%). Automatic lot calculation based on stop loss.
+- `max_open_trades`: Maximum concurrent open positions (default: 3).
+- `lot_size`: Fixed lot size fallback (default: 0.1).
+- `spread_pips`: Fixed spread in pips (1.0 = 10 points for XAUUSD).
+- `commission`: Commission per lot round turn.
+- `slippage`: Price slippage factor.
+
+### Position Management
+- `use_trailing_stop`: Enable/disable trailing stop (default: true).
+- `trailing_stop_pips`: Distance for the trailing stop in pips.
+- `tp_multiplier`: Global multiplier for strategy's Take Profit.
+- `sl_multiplier`: Global multiplier for strategy's Stop Loss.
+
+### Bot Aggregation
+- `aggregation`: `majority` (most strategies agree), `weighted` (based on weights), or `priority` (first match in list).
+- `strategy_weights`: Dictionary of weights for each strategy.
+- `strategy_priority`: Ordered list of strategy names for priority mode.
+
+### Output & Logging
+- `save_trades`: Save all trade details to CSV (default: true).
+- `output`: Filename for trade CSV (default: `trades.csv`).
+- `log_signals`: Show detailed entry/exit logs in terminal (default: true).
 
 ---
 
-## 3. Random Mode
-
-Used for stress-testing risk management without needing real data.
-
-```bash
-python scripts/run_backtest.py --mode random --execution bot
-```
-
----
-
-## 4. Signal Aggregation Logic
-
-When running in **Bot Mode**, the `BotEngine` aggregates signals using one of the following methods (configurable in `core/bot_engine.py`):
-
-1. **Majority Voting**: The direction with the most votes wins.
-2. **Weighted Confidence**: Signals are weighted by their confidence score.
-3. **Priority-based**: Takes the signal from the highest-priority strategy.
-
----
-
-## 5. Performance Metrics
-
-The system calculates:
-- **Net Profit**: Total gain/loss.
-- **Win Rate**: Percentage of winning trades.
-- **Max Drawdown**: Maximum peak-to-trough decline.
-- **Profit Factor**: Gross Profit / Gross Loss.
-
----
-
-## 6. Tips & Warnings
-
-- **Large Data**: Syncing M1 data from 2005 can result in ~7 million rows. Ensure you have enough disk space and memory (Parquet is efficient, but loading long periods into memory still requires RAM).
-- **Multiprocessing**: Use `--parallel` to run backtests across multiple timeframes or symbols simultaneously.
-- **Offline Mode**: Once synced, you do not need MT5 running or an internet connection to run backtests.
+## 3. Directory Structure
+- `core/`: Backtesting engine, bot orchestration, and strategy loader.
+- `scripts/`: CLI runners for sync and backtesting.
+- `data/backtest-db/`: Local Parquet storage (automatically created).
+- `config/`: Configuration files for strategies and backtests.
+- `strategies/`: Your trading strategy implementations.

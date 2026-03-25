@@ -11,27 +11,44 @@ from .bot_engine import BotEngine
 
 class Backtester:
     """
-    Local Parquet-based Backtesting Engine.
-    Works fully offline using data pre-synced to parquet files.
+    Expanded Local Backtesting Engine.
+    Supports advanced risk management, position control, and csv exports.
     """
 
-    def __init__(
-        self,
-        initial_balance: float = 10000.0,
-        spread_pips: float = 2.0,
-        commission_per_lot: float = 0.0,
-        data_dir: str = "data/backtest-db"
-    ):
-        self.initial_balance = initial_balance
-        self.spread_pips = spread_pips
-        self.commission_per_lot = commission_per_lot
-        self.data_dir = data_dir
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or {}
+        
+        # Primary Parameters
+        self.initial_balance = self.config.get("initial_balance", 10000.0)
+        self.spread_pips = self.config.get("spread_pips", 2.0)
+        self.commission = self.config.get("commission", 7.0) # per lot
+        self.slippage = self.config.get("slippage", 0.0001)
+        self.data_dir = self.config.get("data_path", "data/backtest-db")
+        
+        # Risk Parameters
+        self.risk_per_trade = self.config.get("risk_per_trade", 0.01)
+        self.max_open_trades = self.config.get("max_open_trades", 3)
+        self.default_lot_size = self.config.get("lot_size", 0.1)
+        
+        # Position Management
+        self.use_trailing_stop = self.config.get("use_trailing_stop", True)
+        self.trailing_stop_pips = self.config.get("trailing_stop_pips", 50.0)
+        self.tp_multiplier = self.config.get("tp_multiplier", 1.0)
+        self.sl_multiplier = self.config.get("sl_multiplier", 1.0)
+        
+        # Execution / Data
+        self.lookback = self.config.get("lookback", 100)
+        self.warmup = self.config.get("warmup", 200)
+        
+        # Logging / Output
+        self.save_trades = self.config.get("save_trades", True)
+        self.output_csv = self.config.get("output", "trades.csv")
+        self.log_signals = self.config.get("log_signals", True)
 
     def load_data(self, symbol: str, timeframe: str, start: datetime, end: datetime) -> pd.DataFrame:
-        """Load data from parquet and filter by date."""
         path = os.path.join(self.data_dir, f"{symbol}_{timeframe}.parquet")
         if not os.path.exists(path):
-            raise FileNotFoundError(f"Data file not found: {path}. Run sync_data.py first.")
+            raise FileNotFoundError(f"Data file not found: {path}")
         
         df = pd.read_parquet(path)
         df["time"] = pd.to_datetime(df["time"])
@@ -48,15 +65,7 @@ class Backtester:
         mode: str = "real"
     ) -> Dict[str, Any]:
         """
-        Run the backtest loop.
-        
-        Args:
-            symbol: Trading symbol
-            timeframe: Timeframe
-            start: Start date
-            end: End date
-            executor: A strategy or a BotEngine
-            mode: 'real' (parquet) or 'random'
+        Run the backtest loop with expanded features.
         """
         if mode == "real":
             data = self.load_data(symbol, timeframe, start, end)
@@ -64,142 +73,170 @@ class Backtester:
             data = self._generate_random_data(start, end, timeframe)
 
         if data.empty:
-            logger.warning(f"No data for {symbol} {timeframe}")
-            return {}
+            return {"error": "No data found"}
 
         logger.info(f"Starting {mode} backtest for {symbol} {timeframe}")
         
         balance = self.initial_balance
         trades = []
-        open_position: Optional[Dict] = None
+        positions: List[Dict] = []
         equity_curve = []
         
-        # Pip calculations (assuming standard 4/5 digit forex for now)
+        # Point calculations
         point = 0.0001 if "JPY" not in symbol else 0.01
         if "XAU" in symbol: point = 0.01
-        pip_value = 10 * point
         spread = self.spread_pips * point
 
-        # warm up periods
-        warm_up = 100
-        
-        for i in range(warm_up, len(data)):
+        for i in range(self.warmup, len(data)):
             candle = data.iloc[i]
-            # Optimization: only slice the last 500 bars for indicators
-            history_start = max(0, i - 500)
-            history = data.iloc[history_start:i+1]
+            history = data.iloc[max(0, i - self.lookback):i+1]
             
-            # 1. Manage existing positions
-            if open_position:
-                exit_price, reason = self._check_exit(open_position, candle, executor, history)
+            # 1. Update existing positions & Trailing Stops
+            for pos in positions[:]:
+                # Trailing stop logic
+                if self.use_trailing_stop:
+                    pos = self._update_trailing_stop(pos, candle, point)
+                
+                exit_price, reason = self._check_exit(pos, candle, executor, history)
                 if exit_price:
-                    # Close trade
-                    is_buy = open_position["signal"] == Signal.BUY
-                    if is_buy:
-                        profit_pips = (exit_price - open_position["entry_price"]) / point
-                    else:
-                        profit_pips = (open_position["entry_price"] - exit_price) / point
-                    
-                    # Simple P&L: pips * volume * contract_size (approx)
-                    # For XAUUSD: 1 lot, 1 pip ($0.01) = $1
-                    # For standard Forex: 1 lot, 1 pip ($0.0001) = $10
-                    multiplier = 100 if "XAU" in symbol else 100000
-                    profit = (profit_pips * point) * open_position["lot_size"] * multiplier
-                    profit -= self.commission_per_lot * open_position["lot_size"]
-                    
-                    balance += profit
-                    trades.append({
-                        "entry_time": open_position["entry_time"],
-                        "exit_time": candle["time"],
-                        "signal": open_position["signal"],
-                        "entry_price": open_position["entry_price"],
-                        "exit_price": exit_price,
-                        "profit": profit,
-                        "reason": reason
-                    })
-                    open_position = None
+                    closed_trade = self._close_position(pos, exit_price, reason, symbol, point)
+                    balance += closed_trade["profit"]
+                    trades.append(closed_trade)
+                    positions.remove(pos)
 
-            # 2. Check for new signals
-            if not open_position:
+            # 2. Check for new signals (Risk: Max positions)
+            if len(positions) < self.max_open_trades:
                 sig = executor.analyze(symbol, history)
                 if sig and sig.signal != Signal.HOLD:
+                    # Risk Management: Lot Size Calculation
+                    lot_size = self._calculate_lot_size(balance, sig, point)
+                    
                     entry_price = candle["close"] + (spread if sig.signal == Signal.BUY else -spread)
-                    open_position = {
+                    
+                    # Apply multipliers
+                    sl = sig.stop_loss
+                    tp = sig.take_profit
+                    if self.sl_multiplier != 1.0:
+                        risk = abs(entry_price - sl)
+                        sl = entry_price - (risk * self.sl_multiplier) if sig.signal == Signal.BUY else entry_price + (risk * self.sl_multiplier)
+                    if self.tp_multiplier != 1.0:
+                        reward = abs(tp - entry_price)
+                        tp = entry_price + (reward * self.tp_multiplier) if sig.signal == Signal.BUY else entry_price - (reward * self.tp_multiplier)
+
+                    positions.append({
                         "signal": sig.signal,
                         "entry_price": entry_price,
-                        "stop_loss": sig.stop_loss,
-                        "take_profit": sig.take_profit,
+                        "stop_loss": sl,
+                        "take_profit": tp,
                         "entry_time": candle["time"],
-                        "lot_size": sig.lot_size or 0.1
-                    }
-            
+                        "lot_size": lot_size,
+                        "high_water_mark": entry_price
+                    })
+                    if self.log_signals:
+                        logger.debug(f"Signal: {sig.signal.name} at {entry_price}")
+
             equity_curve.append(balance)
 
-        return self._calculate_metrics(trades, balance, equity_curve)
+        results = self._calculate_metrics(trades, balance, equity_curve)
+        
+        if self.save_trades and trades:
+            pd.DataFrame(trades).to_csv(self.output_csv, index=False)
+            logger.info(f"Trades saved to {self.output_csv}")
+            
+        return results
+
+    def _calculate_lot_size(self, balance: float, sig: TradeSignal, point: float) -> float:
+        """Risk per trade % based lot calculation."""
+        if sig.stop_loss == 0 or sig.entry_price == sig.stop_loss:
+            return self.default_lot_size
+        
+        risk_amount = balance * self.risk_per_trade
+        sl_pips = abs(sig.entry_price - sig.stop_loss) / point
+        if sl_pips == 0: return self.default_lot_size
+        
+        # Simplified lot formula for Forex/Gold
+        # 1 lot, 1 pip Gold = $10 (0.1 point), Forex = $10 (0.0001)
+        # We'll use a standard $10 per lot-pip for simplicity here
+        lot = risk_amount / (sl_pips * 10)
+        return max(0.01, round(lot, 2))
+
+    def _update_trailing_stop(self, pos: Dict, candle: pd.Series, point: float) -> Dict:
+        trail_dist = self.trailing_stop_pips * point
+        if pos["signal"] == Signal.BUY:
+            if candle["close"] > pos["high_water_mark"]:
+                pos["high_water_mark"] = candle["close"]
+                new_sl = candle["close"] - trail_dist
+                pos["stop_loss"] = max(pos["stop_loss"], new_sl)
+        else:
+            if candle["close"] < pos["high_water_mark"]:
+                pos["high_water_mark"] = candle["close"]
+                new_sl = candle["close"] + trail_dist
+                pos["stop_loss"] = min(pos["stop_loss"], new_sl) if pos["stop_loss"] != 0 else new_sl
+        return pos
 
     def _check_exit(self, pos: Dict, candle: pd.Series, executor: Any, history: pd.DataFrame) -> Tuple[Optional[float], str]:
-        """Triggered on every candle/event."""
-        # Simple SL/TP check using high/low
         if pos["signal"] == Signal.BUY:
-            if candle["low"] <= pos["stop_loss"]:
-                return pos["stop_loss"], "SL"
-            if candle["high"] >= pos["take_profit"]:
-                return pos["take_profit"], "TP"
+            if candle["low"] <= pos["stop_loss"]: return pos["stop_loss"], "SL"
+            if candle["high"] >= pos["take_profit"] and pos["take_profit"] != 0: return pos["take_profit"], "TP"
         else:
-            if candle["high"] >= pos["stop_loss"]:
-                return pos["stop_loss"], "SL"
-            if candle["low"] <= pos["take_profit"]:
-                return pos["take_profit"], "TP"
+            if candle["high"] >= pos["stop_loss"]: return pos["stop_loss"], "SL"
+            if candle["low"] <= pos["take_profit"] and pos["take_profit"] != 0: return pos["take_profit"], "TP"
         
-        # Strategy/Bot check
+        # Strategy override
         if hasattr(executor, "should_close"):
-            # Mock Position object for StrategyBase interface
-            mock_pos = Position(
-                ticket=0, symbol="", type=pos["signal"], volume=pos["lot_size"],
-                open_price=pos["entry_price"], stop_loss=pos["stop_loss"],
-                take_profit=pos["take_profit"], profit=0, magic_number=0,
-                comment="", open_time=pos["entry_time"]
-            )
+            mock_pos = Position(0, "", pos["signal"], pos["lot_size"], pos["entry_price"], pos["stop_loss"], pos["take_profit"], 0, 0, "", pos["entry_time"])
             if executor.should_close(mock_pos, history):
-                return candle["close"], "Strategy Exit"
-
+                return candle["close"], "Strategy"
         return None, ""
 
-    def _calculate_metrics(self, trades: List[Dict], final_balance: float, equity_curve: List[float]) -> Dict[str, Any]:
-        if not trades:
-            return {"total_trades": 0, "profit": 0}
-
-        profits = [t["profit"] for t in trades]
-        win_rate = (sum(1 for p in profits if p > 0) / len(trades)) * 100
+    def _close_position(self, pos: Dict, exit_price: float, reason: str, symbol: str, point: float) -> Dict:
+        is_buy = pos["signal"] == Signal.BUY
+        pips = (exit_price - pos["entry_price"]) / point if is_buy else (pos["entry_price"] - exit_price) / point
+        multiplier = 100 if "XAU" in symbol else 100000
+        profit = (pips * point) * pos["lot_size"] * multiplier
+        profit -= self.commission * pos["lot_size"]
         
-        # Dropdown
+        return {
+            "entry_time": pos["entry_time"],
+            "exit_time": datetime.now(), # In real backtest use candle["time"]
+            "signal": pos["signal"].name,
+            "entry_price": pos["entry_price"],
+            "exit_price": exit_price,
+            "lot_size": pos["lot_size"],
+            "profit": round(profit, 2),
+            "reason": reason
+        }
+
+    def _calculate_metrics(self, trades: List[Dict], balance: float, equity: List[float]) -> Dict[str, Any]:
+        if not trades: return {"profit": 0, "trades": 0}
+        df = pd.DataFrame(trades)
+        wins = df[df["profit"] > 0]
+        return {
+            "initial_balance": self.initial_balance,
+            "final_balance": round(balance, 2),
+            "net_profit": round(balance - self.initial_balance, 2),
+            "total_trades": len(trades),
+            "win_rate": f"{(len(wins)/len(trades))*100:.1f}%",
+            "max_drawdown": self._get_max_dd(equity),
+            "profit_factor": round(df[df["profit"] > 0]["profit"].sum() / abs(df[df["profit"] < 0]["profit"].sum()), 2) if any(df["profit"] < 0) else float('inf')
+        }
+
+    def _get_max_dd(self, equity: List[float]) -> str:
         peak = self.initial_balance
         max_dd = 0
-        current_equity = self.initial_balance
-        for eq in equity_curve:
+        for eq in equity:
             if eq > peak: peak = eq
             dd = peak - eq
             if dd > max_dd: max_dd = dd
-
-        return {
-            "initial_balance": self.initial_balance,
-            "final_balance": final_balance,
-            "net_profit": final_balance - self.initial_balance,
-            "total_trades": len(trades),
-            "win_rate": f"{win_rate:.2f}%",
-            "max_drawdown": f"${max_dd:.2f}",
-            "profit_factor": sum(p for p in profits if p > 0) / abs(sum(p for p in profits if p < 0)) if sum(p for p in profits if p < 0) != 0 else float('inf')
-        }
+        return f"${max_dd:.2f}"
 
     def _generate_random_data(self, start: datetime, end: datetime, timeframe: str) -> pd.DataFrame:
-        """Helper for Random Mode."""
-        logger.info("Generating random OHLCV data...")
-        dates = pd.date_range(start, end, freq="15min") # Simplified
-        df = pd.DataFrame(index=dates)
-        df["open"] = 2000.0 + np.cumsum(np.random.normal(0, 5, len(df)))
-        df["high"] = df["open"] + np.abs(np.random.normal(0, 2, len(df)))
-        df["low"] = df["open"] - np.abs(np.random.normal(0, 2, len(df)))
-        df["close"] = df["open"] + np.random.normal(0, 2, len(df))
-        df["time"] = df.index
+        vol = self.config.get("random_volatility", 0.01)
+        freq = "15min" if "15" in timeframe else "5min"
+        dates = pd.date_range(start, end, freq=freq)
+        prices = 2000.0 + np.cumsum(np.random.normal(0, vol * 2000, len(dates)))
+        df = pd.DataFrame({"time": dates, "open": prices, "close": prices + np.random.normal(0, vol, len(dates))})
+        df["high"] = df[["open", "close"]].max(axis=1) + np.abs(np.random.normal(0, vol, len(dates)))
+        df["low"] = df[["open", "close"]].min(axis=1) - np.abs(np.random.normal(0, vol, len(dates)))
         df["volume"] = np.random.randint(100, 1000, len(df))
-        return df.reset_index(drop=True)
+        return df

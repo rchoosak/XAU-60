@@ -22,12 +22,17 @@ def run_single_backtest(args_dict):
         
         symbol = args_dict.get("symbol", "XAUUSD")
         timeframe = args_dict.get("timeframe", "M15")
-        start = datetime.strptime(args_dict.get("start", "2024-01-01"), "%Y-%m-%d")
-        end = datetime.strptime(args_dict.get("end", datetime.now().strftime("%Y-%m-%d")), "%Y-%m-%d")
+        start_str = args_dict.get("start", "2024-01-01")
+        end_str = args_dict.get("end", datetime.now().strftime("%Y-%m-%d"))
+        
+        start = datetime.strptime(start_str, "%Y-%m-%d")
+        end = datetime.strptime(end_str, "%Y-%m-%d")
+        
         mode = args_dict.get("mode", "real")
         execution = args_dict.get("execution", "strategy")
         
-        backtester = Backtester()
+        # Initialize Backtester with all args
+        backtester = Backtester(args_dict)
         
         if execution == "strategy":
             strategy_name = args_dict.get("strategy")
@@ -38,16 +43,23 @@ def run_single_backtest(args_dict):
                 return {"error": f"Strategy {strategy_name} not found"}
             executor = strategy
         else:
-            strategy_names = (args_dict.get("strategies") or "").split(",")
+            strategy_names_raw = args_dict.get("strategies", "")
+            if isinstance(strategy_names_raw, str):
+                strategy_names = strategy_names_raw.split(",")
+            else:
+                strategy_names = strategy_names_raw # could be a list in YAML
+                
             strategies = []
             for name in strategy_names:
-                if not name.strip(): continue
-                s = loader.load_strategy(name.strip())
+                if not str(name).strip(): continue
+                s = loader.load_strategy(str(name).strip())
                 if s: strategies.append(s)
             
             if not strategies:
                 return {"error": "No valid strategies found for bot mode"}
-            executor = BotEngine(strategies)
+            
+            # Initialize BotEngine with specific bot args
+            executor = BotEngine(strategies, args_dict)
             
         result = backtester.run(symbol, timeframe, start, end, executor, mode=mode)
         return {
@@ -57,40 +69,49 @@ def run_single_backtest(args_dict):
         }
     except Exception as e:
         logger.error(f"Backtest failed: {e}")
+        import traceback
+        traceback.print_exc()
         return {"error": str(e)}
 
 def main():
-    parser = argparse.ArgumentParser(description="Local Backtest Runner")
+    parser = argparse.ArgumentParser(description="Expanded Local Backtest Runner")
     parser.add_argument("-f", "--config", type=str, help="Path to backtest YAML config file")
+    
+    # These are mostly for CLI overrides
     parser.add_argument("--mode", choices=["random", "real"])
     parser.add_argument("--execution", choices=["strategy", "bot"])
-    parser.add_argument("--strategy", type=str, help="Single strategy name")
-    parser.add_argument("--strategies", type=str, help="Comma-separated strategy names for bot mode")
+    parser.add_argument("--strategy", type=str)
+    parser.add_argument("--strategies", type=str)
     parser.add_argument("--symbol", type=str)
     parser.add_argument("--timeframe", type=str)
     parser.add_argument("--start", type=str)
     parser.add_argument("--end", type=str)
-    parser.add_argument("--parallel", action="store_true", help="Run multiple symbols/strategies in parallel (example usage)")
+    parser.add_argument("--parallel", action="store_true")
+    
+    # Added some of the new parameters to CLI too for quick testing
+    parser.add_argument("--aggregation", choices=["majority", "weighted", "priority"])
+    parser.add_argument("--initial-balance", type=float, dest="initial_balance")
+    parser.add_argument("--lot-size", type=float, dest="lot_size")
 
     args = parser.parse_args()
     args_dict = vars(args)
 
-    # 1. Load from YAML if provided
     if args.config:
         if os.path.exists(args.config):
             with open(args.config, "r") as f:
                 config_data = yaml.safe_load(f)
                 if config_data:
+                    # Clean up keys: replace - with _ for compatibility
+                    config_data = {k.replace("-", "_"): v for k, v in config_data.items()}
+                    
                     # Merge logic: YAML values are defaults, CLI overrides
-                    # Keep CLI args that are NOT None (user provided them)
                     cli_overrides = {k: v for k, v in args_dict.items() if v is not None and k != "config"}
                     args_dict = {**config_data, **cli_overrides}
         else:
             logger.error(f"Config file not found: {args.config}")
             sys.exit(1)
     
-    if args.parallel:
-        # Example: running across multiple TFs if parallel is set
+    if args_dict.get("parallel"):
         timeframes = ["M5", "M15", "H1"]
         tasks = []
         for tf in timeframes:
