@@ -22,13 +22,13 @@ parameters:
 
   # Trade Management
   risk_reward: 2.0
-  trailing_stop: true
+  trailing_stop: false
   trailing_pips: 20.0
 
   # Stop Loss
   use_atr_sl: true
   atr_period: 14
-  atr_multiplier: 2.0
+  atr_multiplier: 1.5
   stop_loss_pips: 100.0  # Fallback if ATR not available
 
 risk:
@@ -37,7 +37,7 @@ risk:
 
 session:
   start_hour: 8
-  end_hour: 18
+  end_hour: 22
   trade_friday: false
 
 alerts:
