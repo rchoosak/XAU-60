@@ -13,8 +13,8 @@ magic_number: 789456
 parameters:
   # RSI Settings
   rsi_period: 14
-  rsi_overbought: 70.0
-  rsi_oversold: 30.0
+  rsi_overbought: 80.0
+  rsi_oversold: 20.0
 
   # Trauma (EMA) Settings
   trauma_period: 21
@@ -25,10 +25,10 @@ parameters:
   breakout_confirm_bars: 2
 
 risk:
-  stop_loss_pips: 100.0
-  take_profit_pips: 200.0
-  trailing_stop: false
-  trailing_pips: 20.0
+  stop_loss_pips: 150.0
+  take_profit_pips: 400.0
+  trailing_stop: true
+  trailing_pips: 40.0
   max_risk_percent: 2.0
   lot_size: 0.01
 
