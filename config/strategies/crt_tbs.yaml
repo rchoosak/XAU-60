@@ -8,22 +8,22 @@ name: CRT TBS
 parameters:
   fixed_rr: 2.0
   max_trades_per_killzone: 1
-  sl_pips_beyond_sweep: 10.0
-  use_range_tp: true
+  sl_pips_beyond_sweep: 20.0
+  use_range_tp: false
 range_timeframe: H1
 risk:
   lot_size: 0.01
   max_risk_percent: 2.0
 session:
   asian:
-    end_hour: 6
-    start_hour: 0
+    start_hour: 2    # (00:00 UTC = 02:00 โบรก)
+    end_hour: 8      # (06:00 UTC = 08:00 โบรก)
   london_killzone:
-    end_hour: 9
-    start_hour: 7
+    start_hour: 9    # (07:00 UTC = 09:00 โบรก)
+    end_hour: 12     # (10:00 UTC = 12:00 โบรก)
   ny_killzone:
-    end_hour: 15
-    start_hour: 13
+    start_hour: 15   # (13:00 UTC = 15:00 โบรก)
+    end_hour: 18     # (16:00 UTC = 18:00 โบรก)
 symbols:
 - XAUUSD
-timeframe: M1
+timeframe: M15
