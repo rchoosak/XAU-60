@@ -60,3 +60,6 @@ Thumbs.db
 # Distribution
 *.tar.gz
 *.zip
+
+# Backtest Database
+data/backtest-db/

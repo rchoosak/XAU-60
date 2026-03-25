@@ -1,0 +1,124 @@
+import argparse
+import os
+import sys
+import yaml
+from datetime import datetime
+from loguru import logger
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.backtester import Backtester
+from core.bot_engine import BotEngine
+from core.strategy_loader import StrategyLoader
+
+def run_single_backtest(args_dict):
+    """Function to be run in a separate process."""
+    try:
+        # Re-initialize for each process
+        loader = StrategyLoader()
+        loader.discover_strategies()
+        
+        symbol = args_dict.get("symbol", "XAUUSD")
+        timeframe = args_dict.get("timeframe", "M15")
+        start = datetime.strptime(args_dict.get("start", "2024-01-01"), "%Y-%m-%d")
+        end = datetime.strptime(args_dict.get("end", datetime.now().strftime("%Y-%m-%d")), "%Y-%m-%d")
+        mode = args_dict.get("mode", "real")
+        execution = args_dict.get("execution", "strategy")
+        
+        backtester = Backtester()
+        
+        if execution == "strategy":
+            strategy_name = args_dict.get("strategy")
+            if not strategy_name:
+                return {"error": "Execution mode 'strategy' requires --strategy or config value 'strategy'"}
+            strategy = loader.load_strategy(strategy_name)
+            if not strategy:
+                return {"error": f"Strategy {strategy_name} not found"}
+            executor = strategy
+        else:
+            strategy_names = (args_dict.get("strategies") or "").split(",")
+            strategies = []
+            for name in strategy_names:
+                if not name.strip(): continue
+                s = loader.load_strategy(name.strip())
+                if s: strategies.append(s)
+            
+            if not strategies:
+                return {"error": "No valid strategies found for bot mode"}
+            executor = BotEngine(strategies)
+            
+        result = backtester.run(symbol, timeframe, start, end, executor, mode=mode)
+        return {
+            "symbol": symbol,
+            "strategy": args_dict.get("strategy") or args_dict.get("strategies"),
+            "result": result
+        }
+    except Exception as e:
+        logger.error(f"Backtest failed: {e}")
+        return {"error": str(e)}
+
+def main():
+    parser = argparse.ArgumentParser(description="Local Backtest Runner")
+    parser.add_argument("-f", "--config", type=str, help="Path to backtest YAML config file")
+    parser.add_argument("--mode", choices=["random", "real"])
+    parser.add_argument("--execution", choices=["strategy", "bot"])
+    parser.add_argument("--strategy", type=str, help="Single strategy name")
+    parser.add_argument("--strategies", type=str, help="Comma-separated strategy names for bot mode")
+    parser.add_argument("--symbol", type=str)
+    parser.add_argument("--timeframe", type=str)
+    parser.add_argument("--start", type=str)
+    parser.add_argument("--end", type=str)
+    parser.add_argument("--parallel", action="store_true", help="Run multiple symbols/strategies in parallel (example usage)")
+
+    args = parser.parse_args()
+    args_dict = vars(args)
+
+    # 1. Load from YAML if provided
+    if args.config:
+        if os.path.exists(args.config):
+            with open(args.config, "r") as f:
+                config_data = yaml.safe_load(f)
+                if config_data:
+                    # Merge logic: YAML values are defaults, CLI overrides
+                    # Keep CLI args that are NOT None (user provided them)
+                    cli_overrides = {k: v for k, v in args_dict.items() if v is not None and k != "config"}
+                    args_dict = {**config_data, **cli_overrides}
+        else:
+            logger.error(f"Config file not found: {args.config}")
+            sys.exit(1)
+    
+    if args.parallel:
+        # Example: running across multiple TFs if parallel is set
+        timeframes = ["M5", "M15", "H1"]
+        tasks = []
+        for tf in timeframes:
+            task_args = args_dict.copy()
+            task_args["timeframe"] = tf
+            tasks.append(task_args)
+            
+        logger.info(f"Running {len(tasks)} backtests in parallel...")
+        with ProcessPoolExecutor() as executor:
+            futures = [executor.submit(run_single_backtest, t) for t in tasks]
+            for future in as_completed(futures):
+                res = future.result()
+                print_result(res)
+    else:
+        result = run_single_backtest(args_dict)
+        print_result(result)
+
+def print_result(res):
+    if "error" in res:
+        logger.error(f"Error: {res['error']}")
+        return
+        
+    print("\n" + "="*40)
+    print(f" BACKTEST RESULT: {res['symbol']} | {res['strategy']}")
+    print("="*40)
+    for k, v in res["result"].items():
+        print(f"{k:20}: {v}")
+    print("="*40 + "\n")
+
+if __name__ == "__main__":
+    main()

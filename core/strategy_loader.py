@@ -132,11 +132,25 @@ class StrategyLoader:
         Returns:
             Initialized strategy instance or None
         """
-        if strategy_name not in self._strategy_classes:
+        # 1. Try exact match (usually the formal name 'Bollinger Reversion')
+        strategy_class = self._strategy_classes.get(strategy_name)
+
+        # 2. Try normalized match (bollinger_reversion)
+        if not strategy_class:
+            normalized_name = strategy_name.lower().replace(" ", "_").replace("-", "_")
+            # Search in strategy classes for a match with normalized keys
+            for name, cls in self._strategy_classes.items():
+                if name.lower().replace(" ", "_").replace("-", "_") == normalized_name:
+                    strategy_class = cls
+                    break
+        
+        # 3. Try to find by direct module name if still not found
+        # (This is already covered by the loop above if the names align)
+
+        if not strategy_class:
             logger.error(f"Strategy not found: {strategy_name}")
             return None
 
-        strategy_class = self._strategy_classes[strategy_name]
         config = self.load_config(strategy_name)
 
         if config is None:
