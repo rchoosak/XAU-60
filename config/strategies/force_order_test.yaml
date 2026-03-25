@@ -3,8 +3,7 @@ version: "1.0.0"
 enabled: false
 description: "A test strategy to force a single immediate LIVE BUY order on startup to check MT5 execution."
 
-timeframes:
-  - "M1"
+timeframe: "M1"
 symbols:
   - "XAUUSD"
 

@@ -11,6 +11,8 @@ class ForceOrderTest(StrategyBase):
     immediately upon loading to verify MT5 order execution.
     """
     
+    name = "Force Order Test"
+    
     def __init__(self):
         super().__init__()
         self.fired = False
@@ -18,7 +20,8 @@ class ForceOrderTest(StrategyBase):
 
     def initialize(self, config: Dict[str, Any]) -> None:
         self.lot_size = config.get("parameters", {}).get("lot_size", env_config.trading.default_lot_size)
-        
+        self.enabled = config.get("enabled", True)
+
     def analyze(self, symbol: str, data: pd.DataFrame) -> Optional[TradeSignal]:
         # Only fire once per lifecycle
         if not self.fired and not data.empty:
