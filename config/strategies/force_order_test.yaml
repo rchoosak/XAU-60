@@ -1,0 +1,13 @@
+name: "Force Order Test"
+version: "1.0.0"
+enabled: false
+description: "A test strategy to force a single immediate LIVE BUY order on startup to check MT5 execution."
+
+timeframes:
+  - "M1"
+symbols:
+  - "XAUUSD"
+
+# Optional parameters specifically for the force order test
+parameters:
+  lot_size: 0.01  # Safe minimum test lot size

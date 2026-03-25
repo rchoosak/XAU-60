@@ -238,15 +238,34 @@ class TradingBot:
             positions = self.mt5.get_positions()
             
             acc_dict = acc_info.__dict__ if hasattr(acc_info, "__dict__") else {}
-            pos_list = [p.__dict__ for p in (positions or []) if hasattr(p, "__dict__")]
+            
+            # Serialize positions converting Enums and datetime
+            pos_list = []
+            for p in (positions or []):
+                if hasattr(p, "__dict__"):
+                    p_dict = {}
+                    for k, v in p.__dict__.items():
+                        if hasattr(v, "name") and type(v).__name__ in ("Signal", "Enum", "SignalType"):
+                            p_dict[k] = v.name
+                        elif hasattr(v, "isoformat"):
+                            p_dict[k] = v.isoformat()
+                        else:
+                            p_dict[k] = v
+                    pos_list.append(p_dict)
             
             trades = []
             if hasattr(self, "trade_executor") and hasattr(self.trade_executor, "_trade_history"):
                 for t in self.trade_executor._trade_history[-20:]:  # last 20
+                    signal_val = getattr(t, "signal", None)
+                    if hasattr(signal_val, "name"):
+                        signal_str = signal_val.name
+                    else:
+                        signal_str = str(signal_val)
+
                     trades.append({
                         "ticket": getattr(t, "ticket", 0),
                         "symbol": getattr(t, "symbol", ""),
-                        "signal": t.signal.name if hasattr(t, "signal") else str(getattr(t, "signal", "")),
+                        "signal": signal_str,
                         "entry_price": getattr(t, "entry_price", 0),
                         "lot_size": getattr(t, "lot_size", 0),
                         "strategy": getattr(t, "strategy", ""),
