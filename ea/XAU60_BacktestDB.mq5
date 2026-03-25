@@ -5,9 +5,10 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Choosak.R"
 #property link      "https://www.mql5.com"
-#property version   "1.30"
+#property version   "1.40"
 #property strict
 #property description "Exports historical bar data to CSV for Parquet conversion"
+#property description "Diagnostics included for solving 4401 (No history) errors"
 
 //--- input parameters
 input string          InpSymbol = "XAUUSD";      // Symbol
@@ -20,119 +21,105 @@ input datetime        InpEnd = 0;                // End Date (0 = Auto/Current)
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("XAU60_BacktestDB v1.30: Analyzing history...");
+   Print("XAU60_BacktestDB v1.40: Starting diagnostics...");
    
-   // 1. Symbol Validation
+   // --- Diagnostic: Terminal & Environment Info ---
+   bool is_tester = (bool)MQLInfoInteger(MQL_TESTER);
+   long max_bars = TerminalInfoInteger(TERMINAL_MAXBARS);
+   string data_path = TerminalInfoString(TERMINAL_DATA_PATH);
+   
+   Print(" - Environment: ", is_tester ? "Strategy Tester" : "Live Chart");
+   Print(" - Max bars in chart setting: ", (max_bars >= 10000000) ? "Unlimited" : (string)max_bars);
+   Print(" - Data Path: ", data_path);
+
+   // --- Diagnostic: Symbol Info ---
    if(!SymbolSelect(InpSymbol, true))
    {
-      Print("Error: Symbol ", InpSymbol, " not found.");
+      Print("CRITICAL ERROR: Symbol '", InpSymbol, "' not found in Market Watch.");
       return(INIT_FAILED);
    }
-
-   // 2. Check History Availability and Range
+   
+   // --- Diagnostic: History Availability ---
+   ResetLastError();
    int total_bars = Bars(InpSymbol, InpTimeframe);
    if(total_bars <= 0)
    {
-      Print("No history found. Touching history...");
+      Print("Warning: Bars() returned 0. Attempting history sync...");
       datetime dummy[];
       CopyTime(InpSymbol, InpTimeframe, 0, 1, dummy);
       total_bars = Bars(InpSymbol, InpTimeframe);
    }
    
-   if(total_bars <= 0)
+   datetime first_bar = 0, last_bar = 0;
+   datetime times[];
+   if(total_bars > 0)
    {
-      Print("Error: Still no history available for ", InpSymbol);
-      return(INIT_FAILED);
+      if(CopyTime(InpSymbol, InpTimeframe, total_bars - 1, 1, times) > 0) first_bar = times[0];
+      if(CopyTime(InpSymbol, InpTimeframe, 0, 1, times) > 0) last_bar = times[0];
    }
 
-   datetime first_bar_time = 0;
-   datetime last_bar_time = 0;
-   datetime times[];
-   
-   if(CopyTime(InpSymbol, InpTimeframe, total_bars - 1, 1, times) > 0) first_bar_time = times[0];
-   if(CopyTime(InpSymbol, InpTimeframe, 0, 1, times) > 0) last_bar_time = times[0];
+   Print(" - Total Bars available: ", total_bars);
+   Print(" - Earliest Bar: ", (first_bar > 0) ? TimeToString(first_bar) : "N/A");
+   Print(" - Latest Bar:   ", (last_bar > 0)  ? TimeToString(last_bar)  : "N/A");
 
-   Print("History available in Terminal/Tester:");
-   Print(" - Total Bars: ", total_bars);
-   Print(" - Oldest Bar: ", TimeToString(first_bar_time));
-   Print(" - Newest Bar: ", TimeToString(last_bar_time));
-
-   // 3. Resolve Export Range
+   // --- Resolve Range ---
    datetime start = InpStart;
    datetime end = InpEnd;
-   
-   if(start == 0) start = first_bar_time;
-   if(end == 0) end = last_bar_time;
-   
-   // Safety: Ensure start is not before first_bar_time
-   if(start < first_bar_time) 
-   {
-      Print("Warning: Requested start ", TimeToString(start), " is earlier than history. Using ", TimeToString(first_bar_time));
-      start = first_bar_time;
-   }
-   if(end > last_bar_time) end = last_bar_time;
+   if(start == 0) start = first_bar;
+   if(end == 0) end = last_bar;
 
-   // 4. Fetch Data using Count to avoid 4401 range errors
-   int start_pos = iBarShift(InpSymbol, InpTimeframe, start, true);
-   int end_pos = iBarShift(InpSymbol, InpTimeframe, end, true);
-   
-   if(start_pos < 0) start_pos = total_bars - 1;
-   if(end_pos < 0) end_pos = 0;
-   
-   int bars_to_copy = start_pos - end_pos + 1;
-   if(bars_to_copy <= 0)
-   {
-      Print("Error: Calculated bars to copy is ", bars_to_copy, ". Check your dates.");
-      return(INIT_FAILED);
-   }
-
-   Print("Attempting to copy ", bars_to_copy, " bars starting from index ", start_pos);
-
+   // --- Data Extraction ---
    MqlRates rates[];
    ArraySetAsSeries(rates, false);
    
+   Print(" - Requested Range: ", TimeToString(start), " to ", TimeToString(end));
+   
    ResetLastError();
-   // Use start_pos and count method (most reliable)
-   int copied = CopyRates(InpSymbol, InpTimeframe, end_pos, bars_to_copy, rates);
+   int copied = CopyRates(InpSymbol, InpTimeframe, start, end, rates);
+   
    if(copied <= 0)
    {
-      Print("Error: CopyRates failed. Method: Index. Code: ", GetLastError());
-      // Fallback to time-range method
-      copied = CopyRates(InpSymbol, InpTimeframe, start, end, rates);
-      if(copied <= 0)
+      int err = GetLastError();
+      Print("CRITICAL ERROR: CopyRates failed (Error ", err, ").");
+      
+      if(err == 4401)
       {
-         Print("Error: CopyRates failed. Method: TimeRange. Code: ", GetLastError());
-         return(INIT_FAILED);
+         Print(" >>> DIAGNOSIS: History not found for the requested range.");
+         if(is_tester) {
+            Print(" >>> FIX: Change Strategy Tester 'From' date to match your requested range.");
+         } else {
+            Print(" >>> FIX: Open the chart for ", InpSymbol, ", and press HOME key to scroll back and download history.");
+         }
       }
+      else if(err == 4001) Print(" >>> DIAGNOSIS: Internal error. Try restarting MT5.");
+      else if(err == 4302) Print(" >>> DIAGNOSIS: Symbol is not selected in Market Watch.");
+      
+      return(INIT_FAILED);
    }
-   
-   datetime actual_start = rates[0].time;
-   datetime actual_end = rates[copied-1].time;
-   
-   Print("XAU60_BacktestDB: Exporting ", copied, " bars (", TimeToString(actual_start), " to ", TimeToString(actual_end), ")");
 
-   // 5. Build Filename
+   // --- Write CSV ---
    string tf_str = StringSubstr(EnumToString(InpTimeframe), 7);
-   string start_str = TimeToString(actual_start, TIME_DATE); StringReplace(start_str, ".", "-");
-   string end_str = TimeToString(actual_end, TIME_DATE); StringReplace(end_str, ".", "-");
+   string start_str = TimeToString(rates[0].time, TIME_DATE); StringReplace(start_str, ".", "-");
+   string end_str = TimeToString(rates[copied-1].time, TIME_DATE); StringReplace(end_str, ".", "-");
    string csv_filename = StringFormat("%s_%s_%s_%s.csv", InpSymbol, tf_str, start_str, end_str);
    
-   // 6. Write CSV
    int handle = FileOpen(csv_filename, FILE_WRITE|FILE_CSV|FILE_ANSI, ',');
    if(handle == INVALID_HANDLE)
    {
-      Print("Error: FileOpen failed: ", csv_filename);
+      Print("CRITICAL ERROR: Could not create file ", csv_filename);
       return(INIT_FAILED);
    }
    
    FileWrite(handle, "time", "open", "high", "low", "close", "tick_volume");
    for(int i = 0; i < copied; i++)
    {
-      FileWrite(handle, (long)rates[i].time, rates[i].open, rates[i].high, rates[i].low, rates[i].close, rates[i].tick_volume);
+      FileWrite(handle, (long)rates[i].time, rates[i].open, rates[i].high, rates[i].low, rates[i].close, (long)rates[i].tick_volume);
    }
    FileClose(handle);
+
+   Print("SUCCESS: ", copied, " bars exported to ", csv_filename);
+   Print("Full Path: ", data_path, "\\MQL5\\Files\\", csv_filename);
    
-   Print("Success! File: ", csv_filename, " in MQL5/Files/");
    ExpertRemove();
    return(INIT_SUCCEEDED);
 }
