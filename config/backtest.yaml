@@ -14,16 +14,18 @@ warmup: 200                  # Initial bars to skip before trading
 
 # 2. EXECUTION MODE
 execution: bot               # [strategy | bot]
-strategies: "bollinger_reversion,smc_scalper"
+# strategies: "bollinger_reversion,trend_break_trauma,smc_scalper"
+strategies: "bollinger_reversion,trend_break_trauma,smc_scalper"
 
 # 3. TRADING / RISK PARAMETERS
-initial_balance: 10000.0
-risk_per_trade: 0.01         # 1% risk per trade (auto lot calculation)
-max_open_trades: 3
+initial_balance: 1000.0
+risk_per_trade: 0.005         # 1% risk per trade (auto lot calculation)
+max_open_trades: 2
 lot_size: 0.1                # Fallback if risk calculation not possible
-spread_pips: 2.0
+spread_pips: 5.0
 commission: 7.0              # $7 per lot round turn
-slippage: 0.0001
+leverage: 100.0              # 1:100 leverage
+slippage: 0.3
 
 # 4. POSITION MANAGEMENT
 use_trailing_stop: true

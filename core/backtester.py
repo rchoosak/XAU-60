@@ -22,6 +22,7 @@ class Backtester:
         self.initial_balance = self.config.get("initial_balance", 10000.0)
         self.spread_pips = self.config.get("spread_pips", 2.0)
         self.commission = self.config.get("commission", 7.0) # per lot
+        self.leverage = self.config.get("leverage", 100.0)
         self.slippage = self.config.get("slippage", 0.0001)
         self.data_dir = self.config.get("data_path", "data/backtest-db")
         
@@ -130,7 +131,7 @@ class Backtester:
                 sig = executor.analyze(symbol, history)
                 if sig and sig.signal != Signal.HOLD:
                     # Risk Management: Lot Size Calculation
-                    lot_size = self._calculate_lot_size(balance, sig, point)
+                    lot_size = self._calculate_lot_size(balance, sig, point, candle["close"], positions, symbol)
                     
                     entry_price = candle["close"] + (spread if sig.signal == Signal.BUY else -spread)
                     
@@ -166,20 +167,42 @@ class Backtester:
             
         return results
 
-    def _calculate_lot_size(self, balance: float, sig: TradeSignal, point: float) -> float:
-        """Risk per trade % based lot calculation."""
+    def _calculate_lot_size(self, balance: float, sig: TradeSignal, point: float, current_price: float, positions: List[Dict], symbol: str) -> float:
+        """Risk per trade % based lot calculation with leverage/margin limit."""
         if sig.stop_loss == 0 or sig.entry_price == sig.stop_loss:
             return self.default_lot_size
         
+        # 1. Calculate risk-based lot
         risk_amount = balance * self.risk_per_trade
         sl_pips = abs(sig.entry_price - sig.stop_loss) / point
         if sl_pips == 0: return self.default_lot_size
         
-        # Simplified lot formula for Forex/Gold
         # 1 lot, 1 pip Gold = $10 (0.1 point), Forex = $10 (0.0001)
-        # We'll use a standard $10 per lot-pip for simplicity here
         lot = risk_amount / (sl_pips * 10)
-        return max(0.01, round(lot, 2))
+        
+        # 2. Leverage/Margin Check
+        # Contract size (Standard: 100,000 for Forex, 100 for Gold)
+        contract_size = 100 if "XAU" in symbol else 100000
+        
+        # Current margin used by open positions
+        used_margin = 0
+        for pos in positions:
+            # margin = (price * contract_size * lots) / leverage
+            used_margin += (pos["entry_price"] * contract_size * pos["lot_size"]) / self.leverage
+        
+        free_margin = balance - used_margin
+        
+        # Max lot allowed by free margin (at 100% margin usage)
+        # lots = (margin * leverage) / (price * contract_size)
+        max_lot_margin = (free_margin * self.leverage) / (current_price * contract_size)
+        
+        # Cap lot size based on margin (leave 10% buffer for spread/volatility)
+        final_lot = min(lot, max_lot_margin * 0.9)
+        
+        if final_lot < 0.01:
+            return 0.01 # minimum lot
+            
+        return round(final_lot, 2)
 
     def _update_trailing_stop(self, pos: Dict, candle: pd.Series, point: float) -> Dict:
         trail_dist = self.trailing_stop_pips * point

@@ -92,6 +92,7 @@ def main():
     parser.add_argument("--aggregation", choices=["majority", "weighted", "priority"])
     parser.add_argument("--initial-balance", type=float, dest="initial_balance")
     parser.add_argument("--lot-size", type=float, dest="lot_size")
+    parser.add_argument("--leverage", type=float)
 
     args = parser.parse_args()
     args_dict = vars(args)
