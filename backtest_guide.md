@@ -4,12 +4,6 @@ A robust, offline-first system for testing MT5 trading strategies using local Pa
 
 ## 1. Quick Start
 
-### Data Sync
-Sync historical data from MT5 to your local machine.
-```bash
-python3 scripts/sync_data.py --symbol XAUUSD --timeframe M15 --start 2024-01-01
-```
-
 ### Run Backtest (Config File)
 The recommended way to run backtests is using a YAML configuration file.
 ```bash

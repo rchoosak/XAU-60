@@ -45,22 +45,40 @@ class Backtester:
         self.output_csv = self.config.get("output", "trades.csv")
         self.log_signals = self.config.get("log_signals", True)
 
-    def load_data(self, symbol: str, timeframe: str, start: datetime, end: datetime) -> pd.DataFrame:
-        path = os.path.join(self.data_dir, f"{symbol}_{timeframe}.parquet")
+    def load_data(self, symbol: str, timeframe: str, start: Optional[datetime] = None, end: Optional[datetime] = None) -> pd.DataFrame:
+        """Load data from file or directory, with optional date filtering."""
+        if os.path.isfile(self.data_dir):
+            path = self.data_dir
+        else:
+            path = os.path.join(self.data_dir, f"{symbol}_{timeframe}.parquet")
+            
         if not os.path.exists(path):
             raise FileNotFoundError(f"Data file not found: {path}")
         
         df = pd.read_parquet(path)
+        if "time" not in df.columns:
+            # Fallback for older formats if any
+            if "timestamp" in df.columns:
+                df = df.rename(columns={"timestamp": "time"})
+            else:
+                raise ValueError("Data file must contain a 'time' or 'timestamp' column")
+
         df["time"] = pd.to_datetime(df["time"])
-        mask = (df["time"] >= start) & (df["time"] <= end)
-        return df.loc[mask].sort_values("time")
+        df = df.sort_values("time")
+        
+        if start:
+            df = df[df["time"] >= start]
+        if end:
+            df = df[df["time"] <= end]
+            
+        return df
 
     def run(
         self,
         symbol: str,
         timeframe: str,
-        start: datetime,
-        end: datetime,
+        start: Optional[datetime],
+        end: Optional[datetime],
         executor: Union[StrategyBase, BotEngine],
         mode: str = "real"
     ) -> Dict[str, Any]:
@@ -70,7 +88,10 @@ class Backtester:
         if mode == "real":
             data = self.load_data(symbol, timeframe, start, end)
         else:
-            data = self._generate_random_data(start, end, timeframe)
+            # For random data, we still need dates, so use defaults if None
+            r_start = start or datetime(2024, 1, 1)
+            r_end = end or datetime.now()
+            data = self._generate_random_data(r_start, r_end, timeframe)
 
         if data.empty:
             return {"error": "No data found"}

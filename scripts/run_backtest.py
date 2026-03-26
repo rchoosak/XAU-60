@@ -22,11 +22,11 @@ def run_single_backtest(args_dict):
         
         symbol = args_dict.get("symbol", "XAUUSD")
         timeframe = args_dict.get("timeframe", "M15")
-        start_str = args_dict.get("start", "2024-01-01")
-        end_str = args_dict.get("end", datetime.now().strftime("%Y-%m-%d"))
+        start_str = args_dict.get("start")
+        end_str = args_dict.get("end")
         
-        start = datetime.strptime(start_str, "%Y-%m-%d")
-        end = datetime.strptime(end_str, "%Y-%m-%d")
+        start = datetime.strptime(start_str, "%Y-%m-%d") if start_str else None
+        end = datetime.strptime(end_str, "%Y-%m-%d") if end_str else None
         
         mode = args_dict.get("mode", "real")
         execution = args_dict.get("execution", "strategy")

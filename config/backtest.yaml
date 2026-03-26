@@ -3,12 +3,12 @@
 # ==========================================
 
 # 1. DATA PARAMETERS
-mode: random                   # [real | random]
+mode: real                   # [real | random]
 symbol: XAUUSD
-timeframe: M15
-start: "2024-01-01"
-end: "2026-03-25"
-data_path: data/backtest-db
+timeframe: M5
+# start: "2024-01-01"
+# end: "2026-03-25"
+data_path: data/backtest-db/xauusd-m5-bid-2020-01-01-2026-03-24.parquet
 lookback: 100                # Bars to provide to strategy for analysis
 warmup: 200                  # Initial bars to skip before trading
 

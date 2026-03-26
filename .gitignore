@@ -62,4 +62,6 @@ Thumbs.db
 *.zip
 
 # Backtest Database
-data/backtest-db/
+# data/backtest-db/
+
+node_modules/

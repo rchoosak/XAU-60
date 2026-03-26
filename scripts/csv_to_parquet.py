@@ -1,7 +1,7 @@
 """
 MT5 CSV to Parquet Converter
 ===========================
-This script converts CSV files exported from the XAU60_BacktestDB EA into Parquet format 
+This script converts CSV files exported from `dukascopy-node` csv into Parquet format 
 for use with the local backtesting system.
 
 Usage:
@@ -9,7 +9,7 @@ Usage:
 
 Example:
     python3 scripts/csv_to_parquet.py \
-        --input "MQL5/Files/XAUUSD_M5_2024-01-01_2024-03-24.csv" \
+        --input "csv/files/XAUUSD_M5_2024-01-01_2024-03-24.csv" \
         --output "data/backtest-db/XAUUSD_M5_2024-01-01_2024-03-24.parquet"
 
 Requirements:
@@ -40,17 +40,44 @@ def convert_csv_to_parquet(csv_file: str, output_file: str):
 
     try:
         # Load CSV
-        df = pd.read_csv(csv_file)
+        df = pd.read_csv(csv_file, low_memory=False)
         if df.empty:
             logger.warning("CSV file is empty.")
             return False
 
+        # Handle 'timestamp' mapping to 'time'
+        if 'timestamp' in df.columns and 'time' not in df.columns:
+            logger.info("Mapping 'timestamp' column to 'time'")
+            df = df.rename(columns={'timestamp': 'time'})
+
+        # Detect if 'time' is object (might happen if header is repeated in data)
+        if 'time' in df.columns and df['time'].dtype == 'object':
+            # Clean up: remove rows that might be headers (e.g. if files were catenated)
+            df = df[df['time'] != 'timestamp']
+            df = df[df['time'] != 'time']
+            # Convert to numeric, errors='coerce' will make non-numeric rows NaN
+            df['time'] = pd.to_numeric(df['time'], errors='coerce')
+            df = df.dropna(subset=['time'])
+
         # Ensure 'time' is datetime and sorted
         if 'time' in df.columns:
-            df['time'] = pd.to_datetime(df['time'], unit='s' if df['time'].dtype == 'int64' else None)
+            # Detect if timestamp is in milliseconds (value > 10^11) or seconds
+            if df['time'].dtype in ['int64', 'float64', 'int', 'float']:
+                # Filter out obvious outliers if any
+                valid_mask = (df['time'] > 0)
+                df = df[valid_mask]
+                
+                is_ms = (df['time'] > 1e11).any()
+                unit = 'ms' if is_ms else 's'
+                if is_ms:
+                    logger.info("Detected millisecond timestamps")
+                df['time'] = pd.to_datetime(df['time'], unit=unit)
+            else:
+                df['time'] = pd.to_datetime(df['time'])
+            
             df = df.sort_values('time')
         else:
-            logger.error("CSV must contain a 'time' column.")
+            logger.error("CSV must contain a 'time' or 'timestamp' column.")
             return False
 
         # Detect timeframe for new data
