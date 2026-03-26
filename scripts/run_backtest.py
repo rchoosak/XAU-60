@@ -28,8 +28,8 @@ def run_single_backtest(args_dict):
         start = datetime.strptime(start_str, "%Y-%m-%d") if start_str else None
         end = datetime.strptime(end_str, "%Y-%m-%d") if end_str else None
         
-        mode = args_dict.get("mode", "real")
-        execution = args_dict.get("execution", "strategy")
+        mode = args_dict.get("mode", "real") or "real"
+        execution = args_dict.get("execution", "strategy") or "strategy"
         
         # Initialize Backtester with all args
         backtester = Backtester(args_dict)
@@ -43,11 +43,11 @@ def run_single_backtest(args_dict):
                 return {"error": f"Strategy {strategy_name} not found"}
             executor = strategy
         else:
-            strategy_names_raw = args_dict.get("strategies", "")
+            strategy_names_raw = args_dict.get("strategies") or ""
             if isinstance(strategy_names_raw, str):
-                strategy_names = strategy_names_raw.split(",")
+                strategy_names = strategy_names_raw.split(",") if strategy_names_raw else []
             else:
-                strategy_names = strategy_names_raw # could be a list in YAML
+                strategy_names = strategy_names_raw or []
                 
             strategies = []
             for name in strategy_names:
@@ -61,7 +61,15 @@ def run_single_backtest(args_dict):
             # Initialize BotEngine with specific bot args
             executor = BotEngine(strategies, args_dict)
             
-        result = backtester.run(symbol, timeframe, start, end, executor, mode=mode)
+        if args_dict.get("tui"):
+            from core.tui_app import BacktestTUI
+            backtester.start_simulation(symbol, timeframe, start, end, executor, mode=mode)
+            tui = BacktestTUI(backtester)
+            tui.run()
+            # After TUI closes, calculate metrics
+            result = backtester._calculate_metrics(backtester.trades, backtester.balance, backtester.equity_curve)
+        else:
+            result = backtester.run(symbol, timeframe, start, end, executor, mode=mode)
         return {
             "symbol": symbol,
             "strategy": args_dict.get("strategy") or args_dict.get("strategies"),
@@ -87,6 +95,7 @@ def main():
     parser.add_argument("--start", type=str)
     parser.add_argument("--end", type=str)
     parser.add_argument("--parallel", action="store_true")
+    parser.add_argument("--tui", action="store_true", help="Run with Terminal UI dashboard")
     
     # Added some of the new parameters to CLI too for quick testing
     parser.add_argument("--aggregation", choices=["majority", "weighted", "priority"])

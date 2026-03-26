@@ -16,6 +16,9 @@ python-dotenv>=1.0.0  # Environment variable loading
 # UI
 streamlit>=1.30.0
 plotly>=5.18.0
+textual>=8.1.1
+rich>=14.3.3
+plotext>=5.3.2
 
 # Alerts
 python-telegram-bot>=20.0

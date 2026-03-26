@@ -19,32 +19,48 @@ class Backtester:
         self.config = config or {}
         
         # Primary Parameters
-        self.initial_balance = self.config.get("initial_balance", 10000.0)
-        self.spread_pips = self.config.get("spread_pips", 2.0)
-        self.commission = self.config.get("commission", 7.0) # per lot
-        self.leverage = self.config.get("leverage", 100.0)
-        self.slippage = self.config.get("slippage", 0.0001)
-        self.data_dir = self.config.get("data_path", "data/backtest-db")
+        self.initial_balance = self.config.get("initial_balance") or 10000.0
+        self.spread_pips = self.config.get("spread_pips") or 2.0
+        self.commission = self.config.get("commission") or 7.0
+        self.leverage = self.config.get("leverage") or 100.0
+        self.slippage = self.config.get("slippage") or 0.0001
+        self.data_dir = self.config.get("data_path") or "data/backtest-db"
         
         # Risk Parameters
-        self.risk_per_trade = self.config.get("risk_per_trade", 0.01)
-        self.max_open_trades = self.config.get("max_open_trades", 3)
-        self.default_lot_size = self.config.get("lot_size", 0.1)
+        self.risk_per_trade = self.config.get("risk_per_trade") or 0.01
+        self.max_open_trades = self.config.get("max_open_trades") or 3
+        self.default_lot_size = self.config.get("lot_size") or 0.1
         
         # Position Management
-        self.use_trailing_stop = self.config.get("use_trailing_stop", True)
-        self.trailing_stop_pips = self.config.get("trailing_stop_pips", 50.0)
-        self.tp_multiplier = self.config.get("tp_multiplier", 1.0)
-        self.sl_multiplier = self.config.get("sl_multiplier", 1.0)
+        self.use_trailing_stop = self.config.get("use_trailing_stop")
+        if self.use_trailing_stop is None: self.use_trailing_stop = True
+        self.trailing_stop_pips = self.config.get("trailing_stop_pips") or 50.0
+        self.tp_multiplier = self.config.get("tp_multiplier") or 1.0
+        self.sl_multiplier = self.config.get("sl_multiplier") or 1.0
         
         # Execution / Data
-        self.lookback = self.config.get("lookback", 100)
-        self.warmup = self.config.get("warmup", 200)
+        self.lookback = self.config.get("lookback") or 100
+        self.warmup = self.config.get("warmup") or 200
         
         # Logging / Output
-        self.save_trades = self.config.get("save_trades", True)
-        self.output_csv = self.config.get("output", "trades.csv")
-        self.log_signals = self.config.get("log_signals", True)
+        self.save_trades = self.config.get("save_trades")
+        if self.save_trades is None: self.save_trades = True
+        self.output_csv = self.config.get("output") or "trades.csv"
+        self.log_signals = self.config.get("log_signals")
+        if self.log_signals is None: self.log_signals = True
+        
+        # Simulation State
+        self.data: pd.DataFrame = pd.DataFrame()
+        self.current_index = 0
+        self.balance = self.initial_balance
+        self.equity = self.initial_balance
+        self.trades: List[Dict] = []
+        self.positions: List[Dict] = []
+        self.equity_curve: List[float] = []
+        self.executor: Optional[Union[StrategyBase, BotEngine]] = None
+        self.symbol = ""
+        self.point = 0.01
+        self.spread = 0.0
 
     def load_data(self, symbol: str, timeframe: str, start: Optional[datetime] = None, end: Optional[datetime] = None) -> pd.DataFrame:
         """Load data from file or directory, with optional date filtering."""
@@ -65,6 +81,12 @@ class Backtester:
                 raise ValueError("Data file must contain a 'time' or 'timestamp' column")
 
         df["time"] = pd.to_datetime(df["time"])
+        
+        # Ensure OHLC are numeric
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+                
         df = df.sort_values("time")
         
         if start:
@@ -73,6 +95,109 @@ class Backtester:
             df = df[df["time"] <= end]
             
         return df
+
+    def start_simulation(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: Optional[datetime],
+        end: Optional[datetime],
+        executor: Union[StrategyBase, BotEngine],
+        mode: str = "real"
+    ):
+        """Initialize the data and state for a step-by-step simulation."""
+        if mode == "real":
+            self.data = self.load_data(symbol, timeframe, start, end)
+        else:
+            r_start = start or datetime(2024, 1, 1)
+            r_end = end or datetime.now()
+            self.data = self._generate_random_data(r_start, r_end, timeframe)
+
+        if self.data.empty:
+            raise ValueError("No data found for backtest")
+
+        self.symbol = symbol
+        self.executor = executor
+        self.current_index = self.warmup
+        self.balance = self.initial_balance
+        self.equity = self.initial_balance
+        self.trades = []
+        self.positions = []
+        self.equity_curve = []
+        
+        # Point calculations
+        self.point = 0.0001 if "JPY" not in symbol else 0.01
+        if "XAU" in symbol: self.point = 0.01
+        self.spread = self.spread_pips * self.point
+
+    def step(self) -> Optional[Dict[str, Any]]:
+        """Process one candle and return the current state."""
+        if self.current_index >= len(self.data):
+            return None
+
+        candle = self.data.iloc[self.current_index]
+        history = self.data.iloc[max(0, self.current_index - self.lookback):self.current_index+1]
+        
+        # 1. Update existing positions & Trailing Stops
+        for pos in self.positions[:]:
+            if self.use_trailing_stop:
+                pos = self._update_trailing_stop(pos, candle, self.point)
+            
+            exit_price, reason = self._check_exit(pos, candle, self.executor, history)
+            if exit_price:
+                closed_trade = self._close_position(pos, exit_price, reason, self.symbol, self.point)
+                self.balance += closed_trade["profit"]
+                self.trades.append(closed_trade)
+                self.positions.remove(pos)
+
+        # 2. Check for new signals
+        if len(self.positions) < self.max_open_trades:
+            sig = self.executor.analyze(self.symbol, history)
+            if sig and sig.signal != Signal.HOLD:
+                lot_size = self._calculate_lot_size(self.balance, sig, self.point, candle["close"], self.positions, self.symbol)
+                entry_price = candle["close"] + (self.spread if sig.signal == Signal.BUY else -self.spread)
+                
+                sl = sig.stop_loss
+                tp = sig.take_profit
+                if self.sl_multiplier != 1.0:
+                    risk = abs(entry_price - sl)
+                    sl = entry_price - (risk * self.sl_multiplier) if sig.signal == Signal.BUY else entry_price + (risk * self.sl_multiplier)
+                if self.tp_multiplier != 1.0:
+                    reward = abs(tp - entry_price)
+                    tp = entry_price + (reward * self.tp_multiplier) if sig.signal == Signal.BUY else entry_price - (reward * self.tp_multiplier)
+
+                self.positions.append({
+                    "signal": sig.signal,
+                    "entry_price": entry_price,
+                    "stop_loss": sl,
+                    "take_profit": tp,
+                    "entry_time": candle["time"],
+                    "lot_size": lot_size,
+                    "high_water_mark": entry_price
+                })
+                if self.log_signals:
+                    logger.debug(f"Signal: {sig.signal.name} at {entry_price}")
+
+        # Update equity
+        total_unrealized_pnl = 0
+        for pos in self.positions:
+            is_buy = pos["signal"] == Signal.BUY
+            pips = (candle["close"] - pos["entry_price"]) / self.point if is_buy else (pos["entry_price"] - candle["close"]) / self.point
+            multiplier = 100 if "XAU" in self.symbol else 100000
+            pnl = (pips * self.point) * pos["lot_size"] * multiplier
+            total_unrealized_pnl += pnl
+            
+        self.equity = round(self.balance + total_unrealized_pnl, 2)
+        self.equity_curve.append(self.equity)
+        self.current_index += 1
+        
+        return {
+            "candle": candle,
+            "balance": self.balance,
+            "equity": self.equity,
+            "positions": self.positions,
+            "trades_count": len(self.trades)
+        }
 
     def run(
         self,
@@ -83,86 +208,16 @@ class Backtester:
         executor: Union[StrategyBase, BotEngine],
         mode: str = "real"
     ) -> Dict[str, Any]:
-        """
-        Run the backtest loop with expanded features.
-        """
-        if mode == "real":
-            data = self.load_data(symbol, timeframe, start, end)
-        else:
-            # For random data, we still need dates, so use defaults if None
-            r_start = start or datetime(2024, 1, 1)
-            r_end = end or datetime.now()
-            data = self._generate_random_data(r_start, r_end, timeframe)
-
-        if data.empty:
-            return {"error": "No data found"}
-
-        logger.info(f"Starting {mode} backtest for {symbol} {timeframe}")
+        """Run the backtest loop to completion."""
+        self.start_simulation(symbol, timeframe, start, end, executor, mode)
         
-        balance = self.initial_balance
-        trades = []
-        positions: List[Dict] = []
-        equity_curve = []
+        while self.step():
+            pass
+
+        results = self._calculate_metrics(self.trades, self.balance, self.equity_curve)
         
-        # Point calculations
-        point = 0.0001 if "JPY" not in symbol else 0.01
-        if "XAU" in symbol: point = 0.01
-        spread = self.spread_pips * point
-
-        for i in range(self.warmup, len(data)):
-            candle = data.iloc[i]
-            history = data.iloc[max(0, i - self.lookback):i+1]
-            
-            # 1. Update existing positions & Trailing Stops
-            for pos in positions[:]:
-                # Trailing stop logic
-                if self.use_trailing_stop:
-                    pos = self._update_trailing_stop(pos, candle, point)
-                
-                exit_price, reason = self._check_exit(pos, candle, executor, history)
-                if exit_price:
-                    closed_trade = self._close_position(pos, exit_price, reason, symbol, point)
-                    balance += closed_trade["profit"]
-                    trades.append(closed_trade)
-                    positions.remove(pos)
-
-            # 2. Check for new signals (Risk: Max positions)
-            if len(positions) < self.max_open_trades:
-                sig = executor.analyze(symbol, history)
-                if sig and sig.signal != Signal.HOLD:
-                    # Risk Management: Lot Size Calculation
-                    lot_size = self._calculate_lot_size(balance, sig, point, candle["close"], positions, symbol)
-                    
-                    entry_price = candle["close"] + (spread if sig.signal == Signal.BUY else -spread)
-                    
-                    # Apply multipliers
-                    sl = sig.stop_loss
-                    tp = sig.take_profit
-                    if self.sl_multiplier != 1.0:
-                        risk = abs(entry_price - sl)
-                        sl = entry_price - (risk * self.sl_multiplier) if sig.signal == Signal.BUY else entry_price + (risk * self.sl_multiplier)
-                    if self.tp_multiplier != 1.0:
-                        reward = abs(tp - entry_price)
-                        tp = entry_price + (reward * self.tp_multiplier) if sig.signal == Signal.BUY else entry_price - (reward * self.tp_multiplier)
-
-                    positions.append({
-                        "signal": sig.signal,
-                        "entry_price": entry_price,
-                        "stop_loss": sl,
-                        "take_profit": tp,
-                        "entry_time": candle["time"],
-                        "lot_size": lot_size,
-                        "high_water_mark": entry_price
-                    })
-                    if self.log_signals:
-                        logger.debug(f"Signal: {sig.signal.name} at {entry_price}")
-
-            equity_curve.append(balance)
-
-        results = self._calculate_metrics(trades, balance, equity_curve)
-        
-        if self.save_trades and trades:
-            pd.DataFrame(trades).to_csv(self.output_csv, index=False)
+        if self.save_trades and self.trades:
+            pd.DataFrame(self.trades).to_csv(self.output_csv, index=False)
             logger.info(f"Trades saved to {self.output_csv}")
             
         return results

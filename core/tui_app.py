@@ -1,0 +1,214 @@
+import asyncio
+from datetime import datetime
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Static, DataTable, Log
+from textual.containers import Container, Horizontal, Vertical
+from textual.binding import Binding
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+
+class ControlWidget(Static):
+    """Widget for control status and simulation time."""
+    def __init__(self, backtester, app_ptr, **kwargs):
+        super().__init__(**kwargs)
+        self.backtester = backtester
+        self.app_ptr = app_ptr
+
+    def on_mount(self):
+        self.set_interval(0.1, self.update_info)
+
+    def update_info(self):
+        status = "[bold red]PAUSED[/]" if self.app_ptr.paused else "[bold green]RUNNING[/]"
+        
+        # Get time from current candle if available
+        sim_time = "N/A"
+        if self.backtester.current_index < len(self.backtester.data):
+            candle = self.backtester.data.iloc[self.backtester.current_index]
+            sim_time = candle["time"].strftime("%Y.%m.%d %H:%M")
+        
+        content = f"Status: {status}  |  Sim Time: [bold cyan]{sim_time}[/]"
+        self.update(Panel(content, border_style="blue"))
+
+class BacktestInfoWidget(Static):
+    """Widget for backtest metadata."""
+    def __init__(self, backtester, **kwargs):
+        super().__init__(**kwargs)
+        self.backtester = backtester
+
+    def on_mount(self):
+        table = Table.grid(expand=True)
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="bold white")
+        
+        table.add_row("Symbol", self.backtester.symbol)
+        table.add_row("Timeframe", self.backtester.config.get("timeframe", "N/A"))
+        table.add_row("Strategy", str(self.backtester.executor.__class__.__name__))
+        table.add_row("Warmup", str(self.backtester.warmup))
+        
+        self.update(Panel(table, title="Backtest Info", border_style="yellow"))
+
+class StatsWidget(Static):
+    """Widget for account stats."""
+    def __init__(self, backtester, **kwargs):
+        super().__init__(**kwargs)
+        self.backtester = backtester
+
+    def on_mount(self):
+        self.set_interval(0.5, self.update_stats)
+
+    def update_stats(self):
+        table = Table.grid(expand=True)
+        table.add_column("Key", style="cyan")
+        table.add_column("Value", style="bold white")
+        
+        profit = self.backtester.equity - self.backtester.initial_balance
+        profit_color = "green" if profit >= 0 else "red"
+        
+        table.add_row("Balance", f"${self.backtester.balance:,.2f}")
+        table.add_row("Equity", f"${self.backtester.equity:,.2f}")
+        table.add_row("Profit ($)", Text(f"${profit:,.2f}", style=profit_color))
+        table.add_row("Trades", str(len(self.backtester.trades)))
+        
+        self.update(Panel(table, title="Account Info", border_style="green"))
+
+class BacktestTUI(App):
+    """TUI for running a real backtest."""
+    CSS = """
+    Screen {
+        background: #121212;
+    }
+    #main-layout {
+        layout: grid;
+        grid-size: 2 1;
+        grid-columns: 1fr 1fr;
+    }
+    #left-column {
+        height: 100%;
+        padding: 0 1;
+    }
+    #right-column {
+        height: 100%;
+        padding: 0 1;
+    }
+    #controls {
+        height: 5;
+        margin-bottom: 1;
+    }
+    #info-section {
+        layout: horizontal;
+        height: 10;
+        margin-bottom: 1;
+    }
+    #info-section Static {
+        width: 50%;
+    }
+    #signal-history {
+        height: 1fr;
+        border: solid cyan;
+    }
+    DataTable {
+        height: auto;
+        max-height: 100%;
+    }
+    """
+    
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+        Binding("p", "toggle_pause", "Pause/Resume"),
+    ]
+
+    def __init__(self, backtester, **kwargs):
+        super().__init__(**kwargs)
+        self.backtester = backtester
+        self.paused = False
+        self.last_pos_count = 0
+        self.last_trade_count = 0
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield ControlWidget(self.backtester, self, id="controls")
+        yield Container(
+            Vertical(
+                Horizontal(
+                    BacktestInfoWidget(self.backtester),
+                    StatsWidget(self.backtester),
+                    id="info-section"
+                ),
+                DataTable(id="positions-table"),
+                id="left-column"
+            ),
+            Vertical(
+                Log(id="signal-history"),
+                id="right-column"
+            ),
+            id="main-layout"
+        )
+        yield Footer()
+
+    def on_mount(self):
+        table = self.query_one("#positions-table", DataTable)
+        table.add_columns("ID", "Type", "Lot", "Entry", "SL", "TP", "PnL ($)")
+        
+        sig_log = self.query_one("#signal-history", Log)
+        sig_log.write_line("Backtest Simulation Started...")
+        
+        self.set_interval(0.1, self.tick)
+
+    def tick(self):
+        if self.paused:
+            return
+
+        state = self.backtester.step()
+        if state is None:
+            sig_log = self.query_one("#signal-history", Log)
+            # Only log once
+            if not getattr(self, "finished_logged", False):
+                sig_log.write_line(f"[{datetime.now().strftime('%Y.%m.%d %H:%M')}] [SYSTEM] Backtest Completed.")
+                self.finished_logged = True
+            return
+
+        # Update log
+        sig_log = self.query_one("#signal-history", Log)
+        sim_time_str = state["candle"]["time"].strftime("%Y.%m.%d %H:%M")
+        
+        # Check for new positions
+        if len(self.backtester.positions) > self.last_pos_count:
+            new_pos = self.backtester.positions[-1]
+            sig_log.write_line(f"[{sim_time_str}] OPEN {new_pos['signal'].name} at {new_pos['entry_price']:.2f} (Lot: {new_pos['lot_size']:.2f})")
+        
+        # Check for closed trades
+        if len(self.backtester.trades) > self.last_trade_count:
+            last_trade = self.backtester.trades[-1]
+            sig_log.write_line(f"[{sim_time_str}] CLOSE {last_trade['signal']} at {last_trade['exit_price']:.2f} (Profit: ${last_trade['profit']:.2f})")
+
+        self.last_pos_count = len(self.backtester.positions)
+        self.last_trade_count = len(self.backtester.trades)
+        
+        # Update Table
+        table = self.query_one("#positions-table", DataTable)
+        table.clear()
+        for i, pos in enumerate(self.backtester.positions):
+            # Calculate current PnL for display
+            candle = state["candle"]
+            is_buy = pos["signal"].name == "BUY"
+            pips = (candle["close"] - pos["entry_price"]) / self.backtester.point if is_buy else (pos["entry_price"] - candle["close"]) / self.backtester.point
+            multiplier = 100 if "XAU" in self.backtester.symbol else 100000
+            pnl = (pips * self.backtester.point) * pos["lot_size"] * multiplier
+            
+            pnl_style = "green" if pnl >= 0 else "red"
+            
+            table.add_row(
+                str(i),
+                pos["signal"].name,
+                f"{pos['lot_size']:.2f}",
+                f"{pos['entry_price']:.2f}",
+                f"{pos['stop_loss']:.2f}",
+                f"{pos['take_profit']:.2f}",
+                Text(f"${pnl:.2f}", style=pnl_style)
+            )
+
+    def action_toggle_pause(self):
+        self.paused = not self.paused
+        sig_log = self.query_one("#signal-history", Log)
+        sig_log.write_line("PAUSED" if self.paused else "RESUMED")
