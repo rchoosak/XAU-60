@@ -3,6 +3,7 @@ from datetime import datetime
 import pandas as pd
 
 from strategies.smc_scalper import SMCScalper
+from core.strategy_base import Position, Signal
 
 
 def _base_config():
@@ -202,3 +203,72 @@ def test_smc_scalper_debug_logs_gate_reasons(monkeypatch):
     assert any("stage=no_signal" in msg for msg in logs)
     assert any("bullish=no_bullish_choch" in msg for msg in logs)
     assert any("bearish=no_bearish_choch" in msg for msg in logs)
+
+
+def test_smc_scalper_trailing_fixed_mode_backward_compatible():
+    strategy = SMCScalper()
+    cfg = _base_config()
+    cfg["parameters"]["trailing_stop"] = True
+    cfg["parameters"]["trailing_pips"] = 20.0
+    strategy.initialize(cfg)
+
+    pos = Position(
+        ticket=1,
+        symbol="XAUUSD",
+        type=Signal.BUY,
+        volume=0.01,
+        open_price=2000.0,
+        stop_loss=1990.0,
+        take_profit=2100.0,
+        profit=10.0,
+        magic_number=789123,
+        comment="t",
+        open_time=datetime(2026, 1, 1),
+    )
+    data = pd.DataFrame(
+        [{"time": datetime(2026, 1, 1, 0, 1), "open": 0.0, "high": 0.0, "low": 0.0, "close": 2015.0, "volume": 1}]
+    )
+
+    # trailing_pips=20 => 2.0 price for XAU in this strategy
+    assert strategy.get_trailing_stop(pos, data) == 2013.0
+
+
+def test_smc_scalper_trailing_two_stage_wide_then_tight():
+    strategy = SMCScalper()
+    cfg = _base_config()
+    cfg["parameters"].update(
+        {
+            "trailing_stop": True,
+            "trailing_start_pips": 20.0,
+            "trailing_pips_wide": 200.0,
+            "tighten_after_profit_pips": 500.0,
+            "trailing_pips_tight": 80.0,
+        }
+    )
+    strategy.initialize(cfg)
+
+    pos = Position(
+        ticket=2,
+        symbol="XAUUSD",
+        type=Signal.BUY,
+        volume=0.01,
+        open_price=2000.0,
+        stop_loss=1990.0,
+        take_profit=2100.0,
+        profit=10.0,
+        magic_number=789123,
+        comment="t",
+        open_time=datetime(2026, 1, 1),
+    )
+
+    # Profit=150 pips => use wide trailing (200 pips => 20.0 price)
+    wide_data = pd.DataFrame(
+        [{"time": datetime(2026, 1, 1, 0, 1), "open": 0.0, "high": 0.0, "low": 0.0, "close": 2015.0, "volume": 1}]
+    )
+    assert strategy.get_trailing_stop(pos, wide_data) == 1995.0
+
+    # Profit=600 pips => switch to tight trailing (80 pips => 8.0 price)
+    tight_data = pd.DataFrame(
+        [{"time": datetime(2026, 1, 1, 0, 2), "open": 0.0, "high": 0.0, "low": 0.0, "close": 2060.0, "volume": 1}]
+    )
+    assert strategy.get_trailing_stop(pos, tight_data) == 2052.0

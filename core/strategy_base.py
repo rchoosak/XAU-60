@@ -167,6 +167,38 @@ class StrategyBase(ABC):
         """
         return None
 
+    def _apply_trailing_distance(
+        self,
+        position: Position,
+        current_price: float,
+        trail_distance_price: float,
+    ) -> Optional[float]:
+        """
+        Shared helper to convert a trailing distance into a new stop-loss price.
+
+        Args:
+            position: Open position
+            current_price: Current market price
+            trail_distance_price: Absolute distance between market and new SL
+
+        Returns:
+            New stop-loss price or None if no valid update
+        """
+        if trail_distance_price <= 0:
+            return None
+
+        if position.type == Signal.BUY:
+            new_sl = current_price - trail_distance_price
+            if new_sl > position.stop_loss and new_sl < current_price:
+                return new_sl
+            return None
+
+        # SELL
+        new_sl = current_price + trail_distance_price
+        if (position.stop_loss == 0 or new_sl < position.stop_loss) and new_sl > current_price:
+            return new_sl
+        return None
+
     def validate_config(self, config: Dict[str, Any]) -> bool:
         """
         Validate strategy configuration.

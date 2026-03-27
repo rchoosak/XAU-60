@@ -28,7 +28,11 @@ risk:
   take_profit_pips: 300.0  # Fallback TP if mid band is too close
   use_dynamic_tp: true     # TP will adapt to the Middle Band (Mean Reversion)
   trailing_stop: false
-  trailing_pips: 30.0
+  trailing_pips: 30.0      # Backward-compatible fixed trailing distance
+  trailing_start_pips: 0.0
+  trailing_pips_wide: 60.0
+  tighten_after_profit_pips: 150.0
+  trailing_pips_tight: 30.0
   max_risk_percent: 2.0
   lot_size: 0
 

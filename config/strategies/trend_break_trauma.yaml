@@ -28,7 +28,11 @@ risk:
   stop_loss_pips: 150.0
   take_profit_pips: 400.0
   trailing_stop: true
-  trailing_pips: 40.0
+  trailing_pips: 40.0      # Backward-compatible fixed trailing distance
+  trailing_start_pips: 0.0
+  trailing_pips_wide: 120.0
+  tighten_after_profit_pips: 300.0
+  trailing_pips_tight: 40.0
   max_risk_percent: 2.0
   lot_size: 0.01
 

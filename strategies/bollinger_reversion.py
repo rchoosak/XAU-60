@@ -44,6 +44,10 @@ class BollingerReversion(StrategyBase):
         self.use_dynamic_tp = True     
         self.use_trailing_stop = False
         self.trailing_pips = 40.0
+        self.trailing_start_pips = 0.0
+        self.trailing_pips_wide = 40.0
+        self.tighten_after_profit_pips = 0.0
+        self.trailing_pips_tight = 40.0
         
         # Session filters 
         self.use_time_filter = True
@@ -70,7 +74,11 @@ class BollingerReversion(StrategyBase):
         self.take_profit_pips = risk.get("take_profit_pips", 300.0)
         self.use_dynamic_tp = risk.get("use_dynamic_tp", True)
         self.use_trailing_stop = risk.get("trailing_stop", False)
-        self.trailing_pips = risk.get("trailing_pips", 40.0)
+        self.trailing_pips = float(risk.get("trailing_pips", 40.0))
+        self.trailing_start_pips = float(risk.get("trailing_start_pips", 0.0))
+        self.trailing_pips_wide = float(risk.get("trailing_pips_wide", self.trailing_pips))
+        self.tighten_after_profit_pips = float(risk.get("tighten_after_profit_pips", 0.0))
+        self.trailing_pips_tight = float(risk.get("trailing_pips_tight", self.trailing_pips))
         self.lot_size = risk.get("lot_size", env_config.trading.default_lot_size)
         
         session = config.get("session", {})
@@ -173,22 +181,32 @@ class BollingerReversion(StrategyBase):
         return False
         
     def get_trailing_stop(self, position: Position, data: pd.DataFrame) -> Optional[float]:
-        if not self.use_trailing_stop or position.profit <= 0:
+        if not self.use_trailing_stop:
             return None
-            
-        current_price = data.iloc[-1]["close"]
+
+        current_price = float(data.iloc[-1]["close"])
         point = 0.1 if "XAU" in position.symbol else 0.0001
-        trail_distance = self.trailing_pips * point * 10
-        
+        pip_price = point * 10
+        if pip_price <= 0:
+            return None
+
         if position.type == Signal.BUY:
-            new_sl = current_price - trail_distance
-            if new_sl > position.stop_loss and new_sl < current_price:
-                return new_sl
+            profit_price = current_price - position.open_price
         else:
-            new_sl = current_price + trail_distance
-            if (position.stop_loss == 0 or new_sl < position.stop_loss) and new_sl > current_price:
-                return new_sl
-        return None
+            profit_price = position.open_price - current_price
+        if profit_price <= 0:
+            return None
+
+        profit_pips = profit_price / pip_price
+        if profit_pips < self.trailing_start_pips:
+            return None
+
+        trail_pips = self.trailing_pips_wide
+        if self.tighten_after_profit_pips > 0 and profit_pips >= self.tighten_after_profit_pips:
+            trail_pips = self.trailing_pips_tight
+
+        trail_distance = trail_pips * pip_price
+        return self._apply_trailing_distance(position, current_price, trail_distance)
         
     def _is_trading_time(self, data: pd.DataFrame) -> bool:
         current_time = self._to_session_time(data.iloc[-1]["time"])

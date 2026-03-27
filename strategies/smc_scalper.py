@@ -40,6 +40,10 @@ class SMCScalper(StrategyBase):
         self.risk_reward = 2.0
         self.use_trailing_stop = True
         self.trailing_pips = 50.0
+        self.trailing_start_pips = 0.0
+        self.trailing_pips_wide = 50.0
+        self.tighten_after_profit_pips = 0.0
+        self.trailing_pips_tight = 50.0
         self.atr_period = 14
         self.atr_multiplier = 2.0
         self.use_atr_sl = True
@@ -73,7 +77,11 @@ class SMCScalper(StrategyBase):
         self.ob_lookback = params.get("ob_lookback", 20)
         self.risk_reward = params.get("risk_reward", 2.0)
         self.use_trailing_stop = params.get("trailing_stop", True)
-        self.trailing_pips = params.get("trailing_pips", 50.0)
+        self.trailing_pips = float(params.get("trailing_pips", 50.0))
+        self.trailing_start_pips = float(params.get("trailing_start_pips", 0.0))
+        self.trailing_pips_wide = float(params.get("trailing_pips_wide", self.trailing_pips))
+        self.tighten_after_profit_pips = float(params.get("tighten_after_profit_pips", 0.0))
+        self.trailing_pips_tight = float(params.get("trailing_pips_tight", self.trailing_pips))
         self.atr_period = params.get("atr_period", 14)
         self.atr_multiplier = params.get("atr_multiplier", 2.0)
         self.use_atr_sl = params.get("use_atr_sl", True)
@@ -345,23 +353,29 @@ class SMCScalper(StrategyBase):
         if not self.use_trailing_stop:
             return None
 
-        if position.profit <= 0:
+        current_price = float(data.iloc[-1]["close"])
+        pip_price = self._pips_to_price(position.symbol, 1.0)
+        if pip_price <= 0:
             return None
 
-        current_price = data.iloc[-1]["close"]
-        trail_distance = self._pips_to_price(position.symbol, self.trailing_pips)
-
         if position.type == Signal.BUY:
-            new_sl = current_price - trail_distance
-            if new_sl > position.stop_loss and new_sl < current_price:
-                return new_sl
+            profit_price = current_price - position.open_price
+        else:
+            profit_price = position.open_price - current_price
 
-        else:  # SELL
-            new_sl = current_price + trail_distance
-            if (position.stop_loss == 0 or new_sl < position.stop_loss) and new_sl > current_price:
-                return new_sl
+        if profit_price <= 0:
+            return None
 
-        return None
+        profit_pips = profit_price / pip_price
+        if profit_pips < self.trailing_start_pips:
+            return None
+
+        trail_pips = self.trailing_pips_wide
+        if self.tighten_after_profit_pips > 0 and profit_pips >= self.tighten_after_profit_pips:
+            trail_pips = self.trailing_pips_tight
+
+        trail_distance = self._pips_to_price(position.symbol, trail_pips)
+        return self._apply_trailing_distance(position, current_price, trail_distance)
 
     def _is_trading_time(self, data: pd.DataFrame) -> bool:
         """Check if current time is within trading session."""
