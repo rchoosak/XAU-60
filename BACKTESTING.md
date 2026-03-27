@@ -116,3 +116,31 @@ strategies: "bollinger_reversion,smc_scalper"     # ชื่อกลยุท�
 **ข้อแนะนำ:**
 - หากต้องการเทรดข้อมูลทั้งหมดในไฟล์ ให้ **comment** หรือลบบรรทัด `start` และ `end` ออก
 - หากระบุ `start`/`end` ระบบจะกรองข้อมูล (Scope) ตามช่วงเวลาที่กำหนดเท่านั้น
+
+---
+
+## 6. Live-like Backtest (จำลองเหมือนบอทเทรดจริง)
+
+สำหรับกรณีที่ต้องการให้การคำนวณใช้ flow เดียวกับบอทจริง (โหลด `.env` + `settings.yaml` + strategy config และใช้ `RiskManager`/`TradeExecutor` ตัวเดียวกับโหมด live) ให้ใช้สคริปต์ใหม่:
+
+```bash
+python3 scripts/run_replay_backtest.py -f config/replay_backtest.yaml
+```
+
+หรือรันแบบไม่เปิด TUI:
+
+```bash
+python3 scripts/run_replay_backtest.py -f config/replay_backtest.yaml --no-tui
+```
+
+ไฟล์ตั้งค่าตัวอย่างอยู่ที่:
+
+```text
+config/replay_backtest.yaml
+```
+
+จุดสำคัญ:
+- ตัวสคริปต์จะ replay ข้อมูล historical จาก Parquet แล้วป้อนเข้า `TradingBot._tick()` โดยตรง
+- Risk และ lot sizing จะอิงค่าจริงจาก `.env`/`config/settings.yaml` และ `risk` ของแต่ละ strategy
+- โดย default จะใช้ `enabled` ใน `config/strategies/*.yaml` และใช้ `execution` เฉพาะตอนต้องการ override กลยุทธ์
+- รองรับ TUI แบบเดียวกับ backtest เดิม (`p` pause/resume, `q` quit)

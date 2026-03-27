@@ -11,7 +11,8 @@ def setup_logger(
     log_file: Optional[str] = None,
     level: str = "INFO",
     rotation: str = "10 MB",
-    retention: str = "7 days"
+    retention: str = "7 days",
+    console: bool = True,
 ) -> None:
     """
     Configure logging for the trading bot.
@@ -26,15 +27,16 @@ def setup_logger(
     logger.remove()
 
     # Console handler with color
-    logger.add(
-        sys.stderr,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-               "<level>{level: <8}</level> | "
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-               "<level>{message}</level>",
-        level=level,
-        colorize=True,
-    )
+    if console:
+        logger.add(
+            sys.stderr,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                   "<level>{level: <8}</level> | "
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+                   "<level>{message}</level>",
+            level=level,
+            colorize=True,
+        )
 
     # File handler
     if log_file:

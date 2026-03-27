@@ -117,9 +117,13 @@ class BacktestTUI(App):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("p", "toggle_pause", "Pause/Resume"),
-        Binding("r", "reload_config", "Restart"),
+        Binding("q", "quit", "Quit", priority=True),
+        Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
+        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
+        Binding("p", "toggle_pause", "Pause/Resume", priority=True),
+        Binding("ctrl+p", "toggle_pause", "Pause/Resume", show=False, priority=True),
+        Binding("r", "reload_config", "Restart", priority=True),
+        Binding("ctrl+r", "reload_config", "Restart", show=False, priority=True),
     ]
 
     def __init__(

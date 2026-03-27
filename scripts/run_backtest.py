@@ -14,6 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.backtester import Backtester
 from core.bot_engine import BotEngine
 from core.strategy_loader import StrategyLoader
+from utils.logger import setup_logger
 
 _PROCESS_LOADER = None
 
@@ -253,8 +254,17 @@ def _build_backtester(args_dict, loader):
 def run_single_backtest(args_dict):
     """Function to be run in a separate process."""
     try:
-        loader = _get_loader()
         effective_args = _resolve_effective_args(args_dict)
+        if effective_args.get("tui"):
+            # TUI owns terminal rendering; disable console logs to avoid screen corruption.
+            setup_logger(
+                log_file=effective_args.get("log_file"),
+                level=str(effective_args.get("log_level", "INFO")),
+                rotation=str(effective_args.get("log_rotation", "10 MB")),
+                retention=str(effective_args.get("log_retention", "7 days")),
+                console=False,
+            )
+        loader = _get_loader()
         backtester, run_ctx, err = _build_backtester(effective_args, loader)
         if err:
             return {"error": err}
@@ -314,7 +324,8 @@ def main():
     parser.add_argument("--parallel", action="store_true")
     parser.add_argument("--workers", type=int, help="Max worker processes for parallel runs")
     parser.add_argument("--timeframes", type=str, help="Comma-separated timeframes for --parallel")
-    parser.add_argument("--tui", action="store_true", help="Run with Terminal UI dashboard")
+    parser.add_argument("--tui", action="store_true", default=None, help="Run with Terminal UI dashboard")
+    parser.add_argument("--no-tui", action="store_true", help="Disable Terminal UI dashboard")
     parser.add_argument("--tui-steps", type=int, default=None, help="Backtest steps per TUI frame")
     parser.add_argument("--tui-interval", type=float, default=None, help="TUI frame interval in seconds")
     
@@ -326,6 +337,14 @@ def main():
 
     args = parser.parse_args()
     args_dict = vars(args)
+
+    # Default behavior: TUI ON unless explicitly disabled.
+    no_tui = bool(args_dict.pop("no_tui", False))
+    if no_tui:
+        args_dict["tui"] = False
+    elif args_dict.get("tui") is None:
+        args_dict["tui"] = True
+
     cli_overrides = {k: v for k, v in args_dict.items() if v is not None and k != "config"}
     config_path = args.config
 
