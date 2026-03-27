@@ -157,3 +157,48 @@ def test_smc_scalper_uses_configured_fvg_lookback_for_bullish_and_bearish_paths(
     bearish_signal = strategy._check_bearish_setup("XAUUSD", data)
     assert bearish_signal is not None
     assert strategy.smc.bearish_fvg_lookback == 33
+
+
+class _NoSignalSMC:
+    def detect_bullish_choch(self, data, lookback):
+        return None
+
+    def detect_bearish_choch(self, data, lookback):
+        return None
+
+
+def test_smc_scalper_debug_logs_gate_reasons(monkeypatch):
+    strategy = SMCScalper()
+    cfg = _base_config()
+    cfg["parameters"]["choch_lookback"] = 3
+    cfg["debug"] = {
+        "enabled": True,
+        "log_every_n_bars": 1,
+        "include_pass_logs": False,
+    }
+    strategy.initialize(cfg)
+    strategy.smc = _NoSignalSMC()
+
+    logs = []
+    monkeypatch.setattr("strategies.smc_scalper.logger.info", lambda msg: logs.append(msg))
+
+    data = pd.DataFrame(
+        [
+            {
+                "time": datetime(2026, 1, 1, 0, 0) + pd.Timedelta(seconds=i),
+                "open": 2000.0,
+                "high": 2000.5,
+                "low": 1999.5,
+                "close": 2000.0,
+                "volume": 1,
+            }
+            for i in range(5)
+        ]
+    )
+
+    signal = strategy.analyze("XAUUSD", data)
+
+    assert signal is None
+    assert any("stage=no_signal" in msg for msg in logs)
+    assert any("bullish=no_bullish_choch" in msg for msg in logs)
+    assert any("bearish=no_bearish_choch" in msg for msg in logs)

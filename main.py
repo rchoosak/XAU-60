@@ -8,6 +8,7 @@ import signal
 import argparse
 import json
 import os
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -483,14 +484,40 @@ def main():
     parser.add_argument(
         "--ui",
         action="store_true",
-        help="Launch Streamlit UI instead of CLI"
+        help="Launch Streamlit UI dashboard only (does not execute live trading loop)"
+    )
+    parser.add_argument(
+        "--ui-with-bot",
+        action="store_true",
+        help="Launch Streamlit UI and run live trading loop in the same command"
     )
 
     args = parser.parse_args()
 
+    if args.ui_with_bot:
+        import subprocess
+        print(
+            "[INFO] Starting live bot + UI mode. "
+            "Orders can be executed while dashboard is open."
+        )
+        bot = TradingBot(args.config)
+        bot_thread = threading.Thread(target=bot.run, name="TradingBotThread", daemon=True)
+        bot_thread.start()
+        try:
+            subprocess.run(["streamlit", "run", "ui/app.py"])
+        finally:
+            bot.running = False
+            if bot_thread.is_alive():
+                bot_thread.join(timeout=5)
+        return
+
     if args.ui:
         # Launch Streamlit UI
         import subprocess
+        print(
+            "[INFO] UI mode launches dashboard only. "
+            "Run `python main.py` in another terminal, or use `python main.py --ui-with-bot`."
+        )
         subprocess.run(["streamlit", "run", "ui/app.py"])
         return
 

@@ -104,14 +104,21 @@ def render_strategy_config():
 
             # Basic settings
             col1, col2 = st.columns(2)
+            timeframe_options = ["S1", "M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+            current_timeframe = config.get("timeframe", "M15")
+            timeframe_index = (
+                timeframe_options.index(current_timeframe)
+                if current_timeframe in timeframe_options
+                else timeframe_options.index("M15")
+            )
 
             with col1:
                 new_name = st.text_input("Strategy Name", value=config.get('name', ''))
                 new_enabled = st.checkbox("Enabled", value=config.get('enabled', False))
                 new_timeframe = st.selectbox(
                     "Timeframe",
-                    options=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
-                    index=["M1", "M5", "M15", "M30", "H1", "H4", "D1"].index(config.get('timeframe', 'M15'))
+                    options=timeframe_options,
+                    index=timeframe_index,
                 )
 
             with col2:
@@ -219,7 +226,7 @@ class MyStrategy(StrategyBase):
     new_name = st.text_input("Strategy Name", placeholder="My Strategy")
     new_file = st.text_input("File Name (without .yaml)", placeholder="my_strategy")
     new_symbols = st.text_input("Symbols", value="XAUUSD")
-    new_timeframe = st.selectbox("Timeframe", ["M1", "M5", "M15", "M30", "H1", "H4", "D1"], index=2)
+    new_timeframe = st.selectbox("Timeframe", ["S1", "M1", "M5", "M15", "M30", "H1", "H4", "D1"], index=3)
 
     if st.button("Create Strategy Config", type="primary"):
         if not new_name or not new_file:

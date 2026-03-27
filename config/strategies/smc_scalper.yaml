@@ -12,19 +12,19 @@ magic_number: 789123
 
 parameters:
   # CHoCH Detection
-  choch_lookback: 50
+  choch_lookback: 10        # 50
 
   # Fair Value Gap
-  fvg_min_pips: 5.0
-  fvg_lookback: 20
+  fvg_min_pips: 1.0         # 5.0
+  fvg_lookback: 20          # 20
 
   # Order Block
-  ob_lookback: 20
+  ob_lookback: 20           # 20
 
   # Trade Management
-  risk_reward: 2.0
+  risk_reward: 2.0          # 2.0
   trailing_stop: false
-  trailing_pips: 20.0
+  trailing_pips: 20.0       # 20.0
 
   # Stop Loss
   use_atr_sl: true
@@ -37,12 +37,17 @@ risk:
   lot_size: 0
 
 session:
-  use_time_filter: true
+  use_time_filter: false
   timezone: "UTC"
   data_timezone: "UTC"
   start_hour: 12
   end_hour: 22
   trade_friday: true
+
+debug:
+  enabled: true
+  log_every_n_bars: 1
+  include_pass_logs: false
 
 alerts:
   telegram: true

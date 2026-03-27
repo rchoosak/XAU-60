@@ -2,6 +2,8 @@
 Streamlit Trading Bot UI - Main Application.
 """
 import sys
+import json
+import time
 from pathlib import Path
 
 # Add parent directory to path
@@ -48,8 +50,30 @@ def main():
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**Status:** 🟢 Running")
-    st.sidebar.markdown("**MT5:** Connected")
+    state_file = Path(__file__).parent.parent / "data" / "live_state.json"
+    live_status = "🔴 Offline"
+    mt5_status = "Unknown"
+    last_sync = "N/A"
+    try:
+        if state_file.exists():
+            with open(state_file, "r") as f:
+                state = json.load(f)
+            last_updated = float(state.get("last_updated", 0) or 0)
+            if last_updated > 0:
+                last_sync = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_updated))
+                if time.time() - last_updated < 30:
+                    live_status = "🟢 Live"
+            account_info = state.get("account_info", {}) if isinstance(state, dict) else {}
+            mt5_status = account_info.get("server", "Connected") if live_status.startswith("🟢") else "Disconnected"
+        else:
+            mt5_status = "Disconnected"
+    except Exception:
+        live_status = "🟡 Unknown"
+        mt5_status = "Unknown"
+
+    st.sidebar.markdown(f"**Status:** {live_status}")
+    st.sidebar.markdown(f"**MT5:** {mt5_status}")
+    st.sidebar.caption(f"Last sync: {last_sync}")
 
     # Page routing
     if page == "Dashboard":

@@ -132,6 +132,7 @@ class MT5Connector:
         self._connected = False
         self._account_info: Optional[AccountInfo] = None
         self.backend_mode = _BACKEND_MODE
+        self._s1_resolution_warning_emitted = False
 
     def connect(
         self,
@@ -317,6 +318,19 @@ class MT5Connector:
             "tick_volume": "volume",
             "real_volume": "real_volume",
         })
+
+        if (
+            timeframe.upper() == "S1"
+            and not self._s1_resolution_warning_emitted
+            and len(df) >= 2
+        ):
+            delta_s = (df["time"].iloc[-1] - df["time"].iloc[-2]).total_seconds()
+            if delta_s >= 30:
+                logger.warning(
+                    "Requested S1 but received coarse bars "
+                    f"(delta={delta_s:.0f}s). EA/terminal likely falling back to M1."
+                )
+                self._s1_resolution_warning_emitted = True
 
         return df[["time", "open", "high", "low", "close", "volume"]]
 

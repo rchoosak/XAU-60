@@ -6,10 +6,18 @@ input string BridgeToken = "change-me";
 input int PollIntervalMs = 1000;
 input int PollTimeoutMs = 25000;
 input int RequestTimeoutMs = 10000;
+input int S1CacheLookbackSeconds = 21600; // 6 hours of tick-based S1 cache
+input int S1CacheMaxBars = 30000; // cap memory usage for cached S1 bars
 
 string g_base_url = "";
 datetime g_last_processed = 0;
 datetime g_last_idle_log = 0;
+bool g_warned_s1_fallback = false;
+bool g_warned_s1_cache_mode = false;
+string g_s1_cache_symbol = "";
+MqlRates g_s1_cache_rates[];
+long g_s1_cache_last_tick_msc = 0;
+bool g_s1_cache_ready = false;
 
 int OnInit()
 {
@@ -138,15 +146,23 @@ bool HandleSymbolSelect(const string request_body, string &result_json, string &
 bool HandleCopyRatesFromPos(const string request_body, string &result_json, string &error_message)
 {
    string symbol = GetParam(request_body, "symbol");
-   ENUM_TIMEFRAMES timeframe = ParseTimeframe(GetParam(request_body, "timeframe"));
+   string timeframe_value = GetParam(request_body, "timeframe");
    int start_pos = (int)StringToInteger(GetParam(request_body, "start_pos"));
    int count = (int)StringToInteger(GetParam(request_body, "count"));
+   bool use_s1_cache = IsS1Request(timeframe_value) && !SupportsPeriodS1();
 
    MqlRates rates[];
-   int copied = CopyRates(symbol, timeframe, start_pos, count, rates);
+   int copied = -1;
+   if(use_s1_cache)
+      copied = CopyS1RatesFromPosCached(symbol, start_pos, count, rates);
+   else
+   {
+      ENUM_TIMEFRAMES timeframe = ParseTimeframe(timeframe_value);
+      copied = CopyRates(symbol, timeframe, start_pos, count, rates);
+   }
    if(copied < 0)
    {
-      error_message = "CopyRates from pos failed";
+      error_message = use_s1_cache ? "S1 cache copy from pos failed" : "CopyRates from pos failed";
       return false;
    }
 
@@ -157,15 +173,23 @@ bool HandleCopyRatesFromPos(const string request_body, string &result_json, stri
 bool HandleCopyRatesFrom(const string request_body, string &result_json, string &error_message)
 {
    string symbol = GetParam(request_body, "symbol");
-   ENUM_TIMEFRAMES timeframe = ParseTimeframe(GetParam(request_body, "timeframe"));
+   string timeframe_value = GetParam(request_body, "timeframe");
    datetime start_time = (datetime)StringToInteger(GetParam(request_body, "start_time"));
    int count = (int)StringToInteger(GetParam(request_body, "count"));
+   bool use_s1_cache = IsS1Request(timeframe_value) && !SupportsPeriodS1();
 
    MqlRates rates[];
-   int copied = CopyRates(symbol, timeframe, start_time, count, rates);
+   int copied = -1;
+   if(use_s1_cache)
+      copied = CopyS1RatesFromCached(symbol, start_time, count, rates);
+   else
+   {
+      ENUM_TIMEFRAMES timeframe = ParseTimeframe(timeframe_value);
+      copied = CopyRates(symbol, timeframe, start_time, count, rates);
+   }
    if(copied < 0)
    {
-      error_message = "CopyRates failed";
+      error_message = use_s1_cache ? "S1 cache copy failed" : "CopyRates failed";
       return false;
    }
 
@@ -176,15 +200,23 @@ bool HandleCopyRatesFrom(const string request_body, string &result_json, string 
 bool HandleCopyRatesRange(const string request_body, string &result_json, string &error_message)
 {
    string symbol = GetParam(request_body, "symbol");
-   ENUM_TIMEFRAMES timeframe = ParseTimeframe(GetParam(request_body, "timeframe"));
+   string timeframe_value = GetParam(request_body, "timeframe");
    datetime start_time = (datetime)StringToInteger(GetParam(request_body, "start_time"));
    datetime end_time = (datetime)StringToInteger(GetParam(request_body, "end_time"));
+   bool use_s1_cache = IsS1Request(timeframe_value) && !SupportsPeriodS1();
 
    MqlRates rates[];
-   int copied = CopyRates(symbol, timeframe, start_time, end_time, rates);
+   int copied = -1;
+   if(use_s1_cache)
+      copied = CopyS1RatesRangeCached(symbol, start_time, end_time, rates);
+   else
+   {
+      ENUM_TIMEFRAMES timeframe = ParseTimeframe(timeframe_value);
+      copied = CopyRates(symbol, timeframe, start_time, end_time, rates);
+   }
    if(copied < 0)
    {
-      error_message = "CopyRates range failed";
+      error_message = use_s1_cache ? "S1 cache copy range failed" : "CopyRates range failed";
       return false;
    }
 
@@ -468,6 +500,244 @@ void PostResponse(const string request_id, const bool ok, const string result_js
    Print("Bridge response posted. HTTP status=", status, " last_error=", GetLastError(), " response=", response_body, " headers=", response_headers);
 }
 
+bool SupportsPeriodS1()
+{
+#ifdef PERIOD_S1
+   return true;
+#else
+   return false;
+#endif
+}
+
+bool IsS1Request(const string value)
+{
+   string normalized = Trim(value);
+   StringToUpper(normalized);
+   return normalized == "S1" || normalized == "1S";
+}
+
+void ResetS1Cache(const string symbol)
+{
+   g_s1_cache_symbol = symbol;
+   ArrayResize(g_s1_cache_rates, 0);
+   g_s1_cache_last_tick_msc = 0;
+   g_s1_cache_ready = false;
+}
+
+double TickToPrice(MqlTick &tick)
+{
+   if(tick.bid > 0.0)
+      return tick.bid;
+   if(tick.last > 0.0)
+      return tick.last;
+   return tick.ask;
+}
+
+void TrimS1Cache()
+{
+   int total = ArraySize(g_s1_cache_rates);
+   int max_bars = MathMax(S1CacheMaxBars, 1000);
+   if(total <= max_bars)
+      return;
+
+   int to_drop = total - max_bars;
+   for(int i = 0; i < max_bars; i++)
+      g_s1_cache_rates[i] = g_s1_cache_rates[i + to_drop];
+   ArrayResize(g_s1_cache_rates, max_bars);
+}
+
+void AppendTickToS1Cache(const string symbol, MqlTick &tick)
+{
+   datetime second_time = (datetime)tick.time;
+   double price = TickToPrice(tick);
+   if(price <= 0.0 || second_time <= 0)
+      return;
+
+   int spread = (int)SymbolInfoInteger(symbol, SYMBOL_SPREAD);
+   int total = ArraySize(g_s1_cache_rates);
+   if(total == 0 || g_s1_cache_rates[total - 1].time != second_time)
+   {
+      MqlRates bar;
+      ZeroMemory(bar);
+      bar.time = second_time;
+      bar.open = price;
+      bar.high = price;
+      bar.low = price;
+      bar.close = price;
+      bar.tick_volume = 1;
+      bar.spread = spread;
+      bar.real_volume = 0;
+      ArrayResize(g_s1_cache_rates, total + 1);
+      g_s1_cache_rates[total] = bar;
+   }
+   else
+   {
+      if(price > g_s1_cache_rates[total - 1].high)
+         g_s1_cache_rates[total - 1].high = price;
+      if(price < g_s1_cache_rates[total - 1].low)
+         g_s1_cache_rates[total - 1].low = price;
+      g_s1_cache_rates[total - 1].close = price;
+      g_s1_cache_rates[total - 1].tick_volume++;
+      g_s1_cache_rates[total - 1].spread = spread;
+   }
+
+   long tick_msc = (long)tick.time_msc;
+   if(tick_msc <= 0)
+      tick_msc = (long)tick.time * 1000;
+   if(tick_msc > g_s1_cache_last_tick_msc)
+      g_s1_cache_last_tick_msc = tick_msc;
+}
+
+bool RefreshS1Cache(const string symbol)
+{
+   if(symbol == "")
+      return false;
+
+   if(g_s1_cache_symbol != symbol)
+      ResetS1Cache(symbol);
+
+   if(!SymbolSelect(symbol, true))
+      return false;
+
+   datetime now = TimeCurrent();
+   long to_msc = (long)(now + 1) * 1000;
+   long from_msc = 0;
+   if(g_s1_cache_ready)
+      from_msc = g_s1_cache_last_tick_msc + 1;
+   else
+   {
+      long lookback = MathMax((long)S1CacheLookbackSeconds, 300);
+      from_msc = (long)(now - (datetime)lookback) * 1000;
+   }
+
+   if(from_msc >= to_msc)
+      return true;
+
+   MqlTick ticks[];
+   ResetLastError();
+   int copied = CopyTicksRange(symbol, ticks, COPY_TICKS_ALL, (ulong)from_msc, (ulong)to_msc);
+   if(copied < 0)
+   {
+      Print("S1 cache refresh failed. symbol=", symbol, " error=", GetLastError());
+      return false;
+   }
+
+   if(copied == 0 && !g_s1_cache_ready)
+   {
+      // Fallback: prime cache from recent ticks if time-range query returns none.
+      copied = CopyTicks(symbol, ticks, COPY_TICKS_ALL, 0, 2000);
+      if(copied < 0)
+      {
+         Print("S1 cache bootstrap failed. symbol=", symbol, " error=", GetLastError());
+         return false;
+      }
+   }
+
+   for(int i = 0; i < copied; i++)
+      AppendTickToS1Cache(symbol, ticks[i]);
+
+   if(copied > 0)
+   {
+      g_s1_cache_ready = true;
+      TrimS1Cache();
+   }
+
+   if(!g_warned_s1_cache_mode)
+   {
+      Print("Using custom tick->S1 cache mode (PERIOD_S1 unavailable).");
+      g_warned_s1_cache_mode = true;
+   }
+
+   return true;
+}
+
+int CopyS1RatesFromPosCached(const string symbol, const int start_pos, const int count, MqlRates &rates[])
+{
+   if(!RefreshS1Cache(symbol))
+      return -1;
+
+   int total = ArraySize(g_s1_cache_rates);
+   if(total == 0 || count <= 0)
+   {
+      ArrayResize(rates, 0);
+      return 0;
+   }
+
+   int end_idx = total - 1 - MathMax(start_pos, 0);
+   if(end_idx < 0)
+   {
+      ArrayResize(rates, 0);
+      return 0;
+   }
+
+   int start_idx = end_idx - count + 1;
+   if(start_idx < 0)
+      start_idx = 0;
+
+   int out_count = end_idx - start_idx + 1;
+   if(out_count <= 0)
+   {
+      ArrayResize(rates, 0);
+      return 0;
+   }
+
+   ArrayResize(rates, out_count);
+   for(int i = 0; i < out_count; i++)
+      rates[i] = g_s1_cache_rates[start_idx + i];
+   return out_count;
+}
+
+int CopyS1RatesFromCached(const string symbol, const datetime start_time, const int count, MqlRates &rates[])
+{
+   if(!RefreshS1Cache(symbol))
+      return -1;
+
+   int total = ArraySize(g_s1_cache_rates);
+   if(total == 0 || count <= 0)
+   {
+      ArrayResize(rates, 0);
+      return 0;
+   }
+
+   ArrayResize(rates, 0);
+   int out_count = 0;
+   for(int i = 0; i < total && out_count < count; i++)
+   {
+      if(g_s1_cache_rates[i].time < start_time)
+         continue;
+      ArrayResize(rates, out_count + 1);
+      rates[out_count] = g_s1_cache_rates[i];
+      out_count++;
+   }
+   return out_count;
+}
+
+int CopyS1RatesRangeCached(const string symbol, const datetime start_time, const datetime end_time, MqlRates &rates[])
+{
+   if(!RefreshS1Cache(symbol))
+      return -1;
+
+   int total = ArraySize(g_s1_cache_rates);
+   if(total == 0)
+   {
+      ArrayResize(rates, 0);
+      return 0;
+   }
+
+   ArrayResize(rates, 0);
+   int out_count = 0;
+   for(int i = 0; i < total; i++)
+   {
+      datetime t = g_s1_cache_rates[i].time;
+      if(t < start_time || t > end_time)
+         continue;
+      ArrayResize(rates, out_count + 1);
+      rates[out_count] = g_s1_cache_rates[i];
+      out_count++;
+   }
+   return out_count;
+}
+
 string RatesToJson(MqlRates &rates[], const int count)
 {
    string json = "[";
@@ -498,6 +768,16 @@ ENUM_TIMEFRAMES ParseTimeframe(const string value)
 #ifdef PERIOD_S1
    if(normalized == "S1" || normalized == "1S")
       return PERIOD_S1;
+#else
+   if(normalized == "S1" || normalized == "1S")
+   {
+      if(!g_warned_s1_fallback)
+      {
+         Print("PERIOD_S1 is not supported by this MT5 build. Falling back to PERIOD_M1.");
+         g_warned_s1_fallback = true;
+      }
+      return PERIOD_M1;
+   }
 #endif
    if(normalized == "M1")
       return PERIOD_M1;

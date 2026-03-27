@@ -64,11 +64,11 @@ def render_backtest():
             else 0,
         )
 
-        tf_options = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+        tf_options = ["TICK", "S1", "M1", "M5", "M15", "M30", "H1", "H4", "D1"]
         timeframe = st.selectbox(
             "Timeframe",
             options=tf_options,
-            index=tf_options.index(default_tf) if default_tf in tf_options else 2,
+            index=tf_options.index(default_tf) if default_tf in tf_options else tf_options.index("M15"),
         )
 
         col1, col2 = st.columns(2)

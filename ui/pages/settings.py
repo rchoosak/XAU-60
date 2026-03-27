@@ -9,6 +9,26 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
+def _as_int(value, default: int) -> int:
+    """Convert value to int safely."""
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value, default: float) -> float:
+    """Convert value to float safely."""
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def render_settings():
     """Render the settings page."""
     st.title("⚙️ Settings")
@@ -58,7 +78,7 @@ def render_mt5_settings(settings: dict):
         settings.setdefault("mt5", {})
         settings["mt5"]["login"] = st.number_input(
             "Account Login",
-            value=mt5.get("login", 0),
+            value=_as_int(mt5.get("login", 0), 0),
             step=1,
             help="Your MT5 account number"
         )
@@ -87,7 +107,7 @@ def render_mt5_settings(settings: dict):
 
     settings["mt5"]["timeout"] = st.number_input(
         "Connection Timeout (ms)",
-        value=mt5.get("timeout", 60000),
+        value=_as_int(mt5.get("timeout", 60000), 60000),
         step=1000,
         help="Connection timeout in milliseconds"
     )
@@ -112,7 +132,7 @@ def render_risk_settings(settings: dict):
             "Max Risk Per Trade (%)",
             min_value=0.1,
             max_value=10.0,
-            value=risk.get("max_risk_per_trade", 2.0),
+            value=_as_float(risk.get("max_risk_per_trade", 2.0), 2.0),
             step=0.1,
             help="Maximum risk percentage per trade"
         )
@@ -121,7 +141,7 @@ def render_risk_settings(settings: dict):
             "Max Daily Loss (%)",
             min_value=1.0,
             max_value=20.0,
-            value=risk.get("max_daily_loss", 5.0),
+            value=_as_float(risk.get("max_daily_loss", 5.0), 5.0),
             step=0.5,
             help="Stop trading when daily loss reaches this percentage"
         )
@@ -130,7 +150,7 @@ def render_risk_settings(settings: dict):
             "Max Drawdown (%)",
             min_value=5.0,
             max_value=50.0,
-            value=risk.get("max_drawdown", 20.0),
+            value=_as_float(risk.get("max_drawdown", 20.0), 20.0),
             step=1.0,
             help="Stop trading when drawdown reaches this percentage"
         )
@@ -140,7 +160,7 @@ def render_risk_settings(settings: dict):
             "Max Positions",
             min_value=1,
             max_value=20,
-            value=risk.get("max_positions", 5),
+            value=_as_int(risk.get("max_positions", 5), 5),
             help="Maximum simultaneous open positions"
         )
 
@@ -148,7 +168,7 @@ def render_risk_settings(settings: dict):
             "Max Positions Per Symbol",
             min_value=1,
             max_value=10,
-            value=risk.get("max_positions_per_symbol", 2),
+            value=_as_int(risk.get("max_positions_per_symbol", 2), 2),
             help="Maximum positions per trading symbol"
         )
 
@@ -234,27 +254,28 @@ def render_general_settings(settings: dict):
     with col1:
         settings["trading"]["default_lot_size"] = st.number_input(
             "Default Lot Size",
-            value=trading.get("default_lot_size", 0.01),
+            value=_as_float(trading.get("default_lot_size", 0.01), 0.01),
+            min_value=0.0,
             step=0.01,
             format="%.2f"
         )
 
         settings["trading"]["default_magic_number"] = st.number_input(
             "Default Magic Number",
-            value=trading.get("default_magic_number", 123456),
+            value=_as_int(trading.get("default_magic_number", 123456), 123456),
             step=1
         )
 
     with col2:
         settings["trading"]["slippage"] = st.number_input(
             "Max Slippage (points)",
-            value=trading.get("slippage", 10),
+            value=_as_int(trading.get("slippage", 10), 10),
             step=1
         )
 
         settings["trading"]["check_interval"] = st.number_input(
             "Check Interval (seconds)",
-            value=trading.get("check_interval", 1),
+            value=_as_int(trading.get("check_interval", 1), 1),
             step=1,
             help="Seconds between tick checks"
         )
@@ -270,10 +291,12 @@ def render_general_settings(settings: dict):
     col1, col2 = st.columns(2)
 
     with col1:
+        level_options = ["DEBUG", "INFO", "WARNING", "ERROR"]
+        current_level = str(logging.get("level", "INFO"))
         settings["logging"]["level"] = st.selectbox(
             "Log Level",
-            options=["DEBUG", "INFO", "WARNING", "ERROR"],
-            index=["DEBUG", "INFO", "WARNING", "ERROR"].index(logging.get("level", "INFO"))
+            options=level_options,
+            index=level_options.index(current_level) if current_level in level_options else level_options.index("INFO")
         )
 
     with col2:
@@ -295,7 +318,7 @@ def render_general_settings(settings: dict):
     with col1:
         settings["ui"]["refresh_rate"] = st.number_input(
             "Dashboard Refresh Rate (seconds)",
-            value=ui.get("refresh_rate", 5),
+            value=_as_int(ui.get("refresh_rate", 5), 5),
             step=1,
             min_value=1,
             max_value=60
