@@ -1,0 +1,56 @@
+name: "Adaptive Volatility Grid"
+version: "1.0.0"
+enabled: false
+description: "ATR-adaptive mean-reversion grid with ADX trend filter"
+
+symbols:
+  - XAUUSD
+
+timeframe: M1
+magic_number: 789777
+
+parameters:
+  atr_period: 14
+  grid_atr_multiplier: 1.0
+  min_grid_spacing_pips: 80.0
+  max_grid_spacing_pips: 300.0
+  anchor_ema_period: 34
+
+  trend_adx_period: 14
+  trend_adx_max: 28.0
+
+  rsi_period: 14
+  rsi_oversold: 35.0
+  rsi_overbought: 65.0
+
+  risk_reward: 1.6
+  take_profit_spacing_multiplier: 1.0
+
+  cooldown_bars: 1
+  reentry_spacing_factor: 0.8
+  max_signals_per_day: 30
+
+risk:
+  stop_loss_atr_multiplier: 1.8
+  stop_loss_min_pips: 120.0
+  stop_loss_max_pips: 500.0
+  trailing_stop: true
+  trailing_pips: 120.0      # Backward-compatible fixed trailing distance
+  trailing_start_pips: 0.0
+  trailing_pips_wide: 200.0
+  tighten_after_profit_pips: 500.0
+  trailing_pips_tight: 80.0
+  max_risk_percent: 1.0
+  lot_size: 0               # 0 = use global lot or risk-based sizing
+
+session:
+  use_time_filter: true
+  timezone: "UTC"
+  data_timezone: "UTC"
+  start_hour: 6
+  end_hour: 20
+  trade_friday: true
+
+alerts:
+  telegram: true
+  discord: true
