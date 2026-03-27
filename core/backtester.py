@@ -137,6 +137,8 @@ class Backtester:
 
         candle = self.data.iloc[self.current_index]
         history = self.data.iloc[max(0, self.current_index - self.lookback):self.current_index+1]
+        opened_positions: List[Dict[str, Any]] = []
+        closed_trades: List[Dict[str, Any]] = []
         
         # 1. Update existing positions & Trailing Stops
         for pos in self.positions[:]:
@@ -145,9 +147,17 @@ class Backtester:
             
             exit_price, reason = self._check_exit(pos, candle, self.executor, history)
             if exit_price:
-                closed_trade = self._close_position(pos, exit_price, reason, self.symbol, self.point)
+                closed_trade = self._close_position(
+                    pos,
+                    exit_price,
+                    reason,
+                    self.symbol,
+                    self.point,
+                    candle["time"]
+                )
                 self.balance += closed_trade["profit"]
                 self.trades.append(closed_trade)
+                closed_trades.append(closed_trade)
                 self.positions.remove(pos)
 
         # 2. Check for new signals
@@ -175,6 +185,7 @@ class Backtester:
                     "lot_size": lot_size,
                     "high_water_mark": entry_price
                 })
+                opened_positions.append(self.positions[-1].copy())
                 if self.log_signals:
                     logger.debug(f"Signal: {sig.signal.name} at {entry_price}")
 
@@ -196,7 +207,9 @@ class Backtester:
             "balance": self.balance,
             "equity": self.equity,
             "positions": self.positions,
-            "trades_count": len(self.trades)
+            "trades_count": len(self.trades),
+            "opened_positions": opened_positions,
+            "closed_trades": closed_trades,
         }
 
     def run(
@@ -288,7 +301,15 @@ class Backtester:
                 return candle["close"], "Strategy"
         return None, ""
 
-    def _close_position(self, pos: Dict, exit_price: float, reason: str, symbol: str, point: float) -> Dict:
+    def _close_position(
+        self,
+        pos: Dict,
+        exit_price: float,
+        reason: str,
+        symbol: str,
+        point: float,
+        exit_time: Any
+    ) -> Dict:
         is_buy = pos["signal"] == Signal.BUY
         pips = (exit_price - pos["entry_price"]) / point if is_buy else (pos["entry_price"] - exit_price) / point
         multiplier = 100 if "XAU" in symbol else 100000
@@ -297,7 +318,7 @@ class Backtester:
         
         return {
             "entry_time": pos["entry_time"],
-            "exit_time": datetime.now(), # In real backtest use candle["time"]
+            "exit_time": exit_time,
             "signal": pos["signal"].name,
             "entry_price": pos["entry_price"],
             "exit_price": exit_price,

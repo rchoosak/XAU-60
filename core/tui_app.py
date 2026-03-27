@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, DataTable, Log
+from textual.widgets import Header, Footer, Static, DataTable, RichLog
 from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 from rich.table import Table
@@ -118,12 +118,14 @@ class BacktestTUI(App):
         Binding("p", "toggle_pause", "Pause/Resume"),
     ]
 
-    def __init__(self, backtester, **kwargs):
+    def __init__(self, backtester, steps_per_tick: int = 20, update_interval: float = 0.05, **kwargs):
         super().__init__(**kwargs)
         self.backtester = backtester
         self.paused = False
         self.last_pos_count = 0
         self.last_trade_count = 0
+        self.steps_per_tick = max(1, int(steps_per_tick))
+        self.update_interval = max(0.01, float(update_interval))
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -139,7 +141,7 @@ class BacktestTUI(App):
                 id="left-column"
             ),
             Vertical(
-                Log(id="signal-history"),
+                RichLog(id="signal-history"),
                 id="right-column"
             ),
             id="main-layout"
@@ -150,37 +152,61 @@ class BacktestTUI(App):
         table = self.query_one("#positions-table", DataTable)
         table.add_columns("ID", "Type", "Lot", "Entry", "SL", "TP", "PnL ($)")
         
-        sig_log = self.query_one("#signal-history", Log)
-        sig_log.write_line("Backtest Simulation Started...")
+        sig_log = self.query_one("#signal-history", RichLog)
+        sig_log.write(Text("Backtest Simulation Started..."))
         
-        self.set_interval(0.1, self.tick)
+        self.set_interval(self.update_interval, self.tick)
 
     def tick(self):
         if self.paused:
             return
 
-        state = self.backtester.step()
+        state = None
+        opened_events = []
+        closed_events = []
+        for _ in range(self.steps_per_tick):
+            state = self.backtester.step()
+            if state is None:
+                break
+            opened_events.extend(state.get("opened_positions", []))
+            closed_events.extend(state.get("closed_trades", []))
+
         if state is None:
-            sig_log = self.query_one("#signal-history", Log)
+            sig_log = self.query_one("#signal-history", RichLog)
             # Only log once
             if not getattr(self, "finished_logged", False):
-                sig_log.write_line(f"[{datetime.now().strftime('%Y.%m.%d %H:%M')}] [SYSTEM] Backtest Completed.")
+                sig_log.write(Text(f"[{datetime.now().strftime('%Y.%m.%d %H:%M')}] [SYSTEM] Backtest Completed."))
                 self.finished_logged = True
             return
 
         # Update log
-        sig_log = self.query_one("#signal-history", Log)
+        sig_log = self.query_one("#signal-history", RichLog)
         sim_time_str = state["candle"]["time"].strftime("%Y.%m.%d %H:%M")
         
-        # Check for new positions
-        if len(self.backtester.positions) > self.last_pos_count:
-            new_pos = self.backtester.positions[-1]
-            sig_log.write_line(f"[{sim_time_str}] OPEN {new_pos['signal'].name} at {new_pos['entry_price']:.2f} (Lot: {new_pos['lot_size']:.2f})")
-        
-        # Check for closed trades
-        if len(self.backtester.trades) > self.last_trade_count:
-            last_trade = self.backtester.trades[-1]
-            sig_log.write_line(f"[{sim_time_str}] CLOSE {last_trade['signal']} at {last_trade['exit_price']:.2f} (Profit: ${last_trade['profit']:.2f})")
+        # Log event stream from the engine (covers open/close within same frame)
+        for pos in opened_events:
+            entry_time = pos.get("entry_time")
+            if hasattr(entry_time, "strftime"):
+                entry_time_str = entry_time.strftime("%Y.%m.%d %H:%M")
+            else:
+                entry_time_str = sim_time_str
+            side_name = pos["signal"].name
+            side_text = Text(side_name, style="green" if side_name == "BUY" else "red")
+            line = Text(f"[{entry_time_str}] OPEN ")
+            line.append_text(side_text)
+            line.append(f" at {pos['entry_price']:.2f} (Lot: {pos['lot_size']:.2f})")
+            sig_log.write(line)
+        for trade in closed_events:
+            trade_time = trade.get("exit_time")
+            if hasattr(trade_time, "strftime"):
+                trade_time_str = trade_time.strftime("%Y.%m.%d %H:%M")
+            else:
+                trade_time_str = sim_time_str
+            side_text = Text(trade["signal"], style="green" if trade["signal"] == "BUY" else "red")
+            line = Text(f"[{trade_time_str}] CLOSE ")
+            line.append_text(side_text)
+            line.append(f" at {trade['exit_price']:.2f} (Profit: ${trade['profit']:.2f})")
+            sig_log.write(line)
 
         self.last_pos_count = len(self.backtester.positions)
         self.last_trade_count = len(self.backtester.trades)
@@ -200,7 +226,7 @@ class BacktestTUI(App):
             
             table.add_row(
                 str(i),
-                pos["signal"].name,
+                Text(pos["signal"].name, style="green" if pos["signal"].name == "BUY" else "red"),
                 f"{pos['lot_size']:.2f}",
                 f"{pos['entry_price']:.2f}",
                 f"{pos['stop_loss']:.2f}",
@@ -210,5 +236,5 @@ class BacktestTUI(App):
 
     def action_toggle_pause(self):
         self.paused = not self.paused
-        sig_log = self.query_one("#signal-history", Log)
-        sig_log.write_line("PAUSED" if self.paused else "RESUMED")
+        sig_log = self.query_one("#signal-history", RichLog)
+        sig_log.write(Text("PAUSED" if self.paused else "RESUMED"))

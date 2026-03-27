@@ -200,6 +200,9 @@ class RiskManager:
         account = self.mt5.get_account_info()
         if account:
             daily_pnl = account.equity - self._daily_stats.starting_balance
+            if self._daily_stats.starting_balance <= 0:
+                logger.warning("Daily stats starting balance is non-positive; skipping daily loss limit check")
+                return False
             daily_pnl_percent = (daily_pnl / self._daily_stats.starting_balance) * 100
 
             if daily_pnl_percent <= -self.limits.max_daily_loss:

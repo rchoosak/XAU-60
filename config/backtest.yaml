@@ -6,16 +6,16 @@
 mode: real                   # [real | random]
 symbol: XAUUSD
 timeframe: M5
-# start: "2024-01-01"
-# end: "2026-03-25"
+start: "2025-01-01"
+end: "2026-03-23"
 data_path: data/backtest-db/xauusd-m5-bid-2020-01-01-2026-03-24.parquet
 lookback: 100                # Bars to provide to strategy for analysis
 warmup: 200                  # Initial bars to skip before trading
 
 # 2. EXECUTION MODE
-execution: bot               # [strategy | bot]
+execution: strategy               # [strategy | bot]
 # strategies: "bollinger_reversion,trend_break_trauma,smc_scalper"
-strategies: "bollinger_reversion,trend_break_trauma,smc_scalper"
+strategy: "smc_scalper"
 
 # 3. TRADING / RISK PARAMETERS
 initial_balance: 1000.0

@@ -181,7 +181,14 @@ class TradeExecutor:
             if ticket in self._active_trades:
                 record = self._active_trades.pop(ticket)
                 record.close_time = datetime.now()
-                record.close_price = position.open_price  # Will be updated with actual close
+                tick = self.mt5.get_tick(position.symbol)
+                if tick:
+                    if position.type == Signal.BUY:
+                        record.close_price = tick.get("bid", position.open_price)
+                    else:
+                        record.close_price = tick.get("ask", position.open_price)
+                else:
+                    record.close_price = position.open_price
                 record.profit = position.profit
                 record.status = "CLOSED"
                 self._trade_history.append(record)

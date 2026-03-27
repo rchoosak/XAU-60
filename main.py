@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from copy import deepcopy
 import yaml
 from loguru import logger
 
@@ -52,6 +53,7 @@ class TradingBot:
         self.strategy_loader: Optional[StrategyLoader] = None
         self.risk_manager: Optional[RiskManager] = None
         self.trade_executor: Optional[TradeExecutor] = None
+        self._last_analyzed_bar = {}
 
         self._setup_signal_handlers()
 
@@ -93,16 +95,90 @@ class TradingBot:
         Merge YAML config into existing config.
         Environment variables (already in self.config) take precedence.
         """
-        # Only use YAML values if env vars are not set (default values)
-        mt5_yaml = yaml_config.get("mt5", {})
-        if not self.config["mt5"]["login"] and mt5_yaml.get("login"):
-            self.config["mt5"]["login"] = mt5_yaml["login"]
-        if not self.config["mt5"]["password"] and mt5_yaml.get("password"):
-            self.config["mt5"]["password"] = mt5_yaml["password"]
-        if not self.config["mt5"]["server"] and mt5_yaml.get("server"):
-            self.config["mt5"]["server"] = mt5_yaml["server"]
-        if not self.config["mt5"]["path"] and mt5_yaml.get("path"):
-            self.config["mt5"]["path"] = mt5_yaml["path"]
+        def env_is_set(var_name: str) -> bool:
+            value = os.getenv(var_name)
+            return value is not None and value != ""
+
+        env_map = {
+            "mt5": {
+                "mode": "MT5_MODE",
+                "login": "MT5_LOGIN",
+                "password": "MT5_PASSWORD",
+                "server": "MT5_SERVER",
+                "path": "MT5_PATH",
+                "timeout": "MT5_TIMEOUT",
+                "bridge_enabled": "MT5_BRIDGE_ENABLED",
+                "bridge_host": "MT5_BRIDGE_HOST",
+                "bridge_port": "MT5_BRIDGE_PORT",
+                "bridge_token": "MT5_BRIDGE_TOKEN",
+                "bridge_timeout": "MT5_BRIDGE_TIMEOUT",
+                "bridge_poll_timeout": "MT5_BRIDGE_POLL_TIMEOUT",
+            },
+            "risk": {
+                "max_risk_per_trade": "MAX_RISK_PER_TRADE",
+                "max_daily_loss": "MAX_DAILY_LOSS",
+                "max_drawdown": "MAX_DRAWDOWN",
+                "max_positions": "MAX_POSITIONS",
+                "max_positions_per_symbol": "MAX_POSITIONS_PER_SYMBOL",
+            },
+            "trading": {
+                "default_lot_size": "DEFAULT_LOT_SIZE",
+                "default_magic_number": "DEFAULT_MAGIC_NUMBER",
+                "slippage": "SLIPPAGE",
+                "check_interval": "CHECK_INTERVAL",
+            },
+            "logging": {
+                "level": "LOG_LEVEL",
+                "file": "LOG_FILE",
+                "rotation": "LOG_ROTATION",
+                "retention": "LOG_RETENTION",
+            },
+            "ui": {
+                "refresh_rate": "UI_REFRESH_RATE",
+                "theme": "UI_THEME",
+            },
+        }
+
+        alert_env_map = {
+            "telegram": {
+                "enabled": "TELEGRAM_ENABLED",
+                "token": "TELEGRAM_BOT_TOKEN",
+                "chat_id": "TELEGRAM_CHAT_ID",
+            },
+            "discord": {
+                "enabled": "DISCORD_ENABLED",
+                "webhook_url": "DISCORD_WEBHOOK_URL",
+            },
+        }
+
+        merged = deepcopy(self.config)
+
+        for section, key_map in env_map.items():
+            yaml_section = yaml_config.get(section, {})
+            if not isinstance(yaml_section, dict):
+                continue
+            merged.setdefault(section, {})
+            for key, yaml_value in yaml_section.items():
+                env_var = key_map.get(key)
+                if env_var and env_is_set(env_var):
+                    continue
+                merged[section][key] = yaml_value
+
+        yaml_alerts = yaml_config.get("alerts", {})
+        if isinstance(yaml_alerts, dict):
+            merged.setdefault("alerts", {})
+            for channel, key_map in alert_env_map.items():
+                channel_yaml = yaml_alerts.get(channel, {})
+                if not isinstance(channel_yaml, dict):
+                    continue
+                merged["alerts"].setdefault(channel, {})
+                for key, yaml_value in channel_yaml.items():
+                    env_var = key_map.get(key)
+                    if env_var and env_is_set(env_var):
+                        continue
+                    merged["alerts"][channel][key] = yaml_value
+
+        self.config = merged
 
     def initialize(self) -> bool:
         """Initialize all components."""
@@ -211,14 +287,25 @@ class TradingBot:
                     if data is None:
                         continue
 
+                    bar_time = data.iloc[-1]["time"]
+                    bar_key = (name, symbol, strategy.timeframe)
+                    if self._last_analyzed_bar.get(bar_key) == bar_time:
+                        continue
+
                     # Analyze for signals
                     signal = strategy.analyze(symbol, data)
+                    self._last_analyzed_bar[bar_key] = bar_time
 
                     if signal and signal.signal.value != 0:
                         # Execute the signal
                         ticket = self.trade_executor.execute_signal(signal, name)
                         if ticket:
-                            strategy.on_trade_opened(None)
+                            opened_position = next(
+                                (p for p in self.mt5.get_positions() if p.ticket == ticket),
+                                None
+                            )
+                            if opened_position is not None:
+                                strategy.on_trade_opened(opened_position)
 
                 except Exception as e:
                     logger.error(f"Error processing {symbol} with {name}: {e}")
