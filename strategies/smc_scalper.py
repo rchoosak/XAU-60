@@ -4,12 +4,11 @@ Converted from XAUUSD_SMC_Scalper.mq5
 """
 import pandas as pd
 from typing import Optional, Dict, Any
-from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from core.strategy_base import StrategyBase, Signal, TradeSignal, Position
 from indicators.smc_utils import SMCAnalyzer
 from indicators.common import calculate_atr
-from utils.config import config as env_config
 
 
 class SMCScalper(StrategyBase):
@@ -45,9 +44,12 @@ class SMCScalper(StrategyBase):
         self.stop_loss_pips = 100.0
 
         # Session filter
+        self.use_time_filter = True
         self.start_hour = 8
         self.end_hour = 18
         self.trade_friday = False
+        self.session_timezone = "UTC"
+        self.data_timezone = "UTC"
 
         self.magic_number = 789123
 
@@ -66,26 +68,30 @@ class SMCScalper(StrategyBase):
         self.atr_period = params.get("atr_period", 14)
         self.atr_multiplier = params.get("atr_multiplier", 2.0)
         self.use_atr_sl = params.get("use_atr_sl", True)
-        self.stop_loss_pips = params.get("stop_loss_pips", 100.0)
+        risk = config.get("risk", {})
+        self.stop_loss_pips = risk.get("stop_loss_pips", params.get("stop_loss_pips", 100.0))
 
         # Session settings
         session = config.get("session", {})
+        self.use_time_filter = session.get("use_time_filter", True)
         self.start_hour = session.get("start_hour", 8)
         self.end_hour = session.get("end_hour", 18)
         self.trade_friday = session.get("trade_friday", False)
+        self.session_timezone = session.get("timezone", "UTC")
+        self.data_timezone = session.get("data_timezone", "UTC")
 
         # Strategy settings
         self.symbols = config.get("symbols", ["XAUUSD"])
-        self.timeframe = config.get("timeframe", "M15")
+        self.timeframe = config.get("timeframe", "M5")
         self.enabled = config.get("enabled", True)
         self.magic_number = config.get("magic_number", 789123)
 
         # Risk settings
-        risk = config.get("risk", {})
-        self.lot_size = risk.get("lot_size", env_config.trading.default_lot_size)
+        self.lot_size = float(risk.get("lot_size", 0.0))
 
         # Initialize SMC analyzer
-        point = 0.1 if "XAU" in self.symbols[0] else 0.0001
+        symbol_for_point = self.symbols[0] if self.symbols else "XAUUSD"
+        point = self._point_for_symbol(symbol_for_point)
         self.smc = SMCAnalyzer(
             swing_lookback=5,
             fvg_min_pips=self.fvg_min_pips,
@@ -95,6 +101,8 @@ class SMCScalper(StrategyBase):
 
     def analyze(self, symbol: str, data: pd.DataFrame) -> Optional[TradeSignal]:
         """Analyze market and generate trade signal."""
+        if self.smc is None:
+            return None
         if len(data) < self.choch_lookback:
             return None
 
@@ -135,8 +143,7 @@ class SMCScalper(StrategyBase):
         # Check if price is in FVG zone
         if not (fvg.lower_price <= current_price <= fvg.upper_price):
             # Check if price is close to FVG (within 20 pips)
-            point = 0.1 if "XAU" in symbol else 0.0001
-            max_distance = 20 * point * 10
+            max_distance = self._pips_to_price(symbol, 20)
             if abs(current_price - fvg.mid_price) > max_distance:
                 return None
 
@@ -144,11 +151,11 @@ class SMCScalper(StrategyBase):
         entry_price = fvg.mid_price
 
         # Calculate stop loss
-        stop_loss = self._calculate_stop_loss(data, entry_price, is_buy=True)
+        stop_loss = self._calculate_stop_loss(data, symbol, entry_price, is_buy=True)
 
         # Calculate take profit
         take_profit = self._calculate_take_profit(
-            entry_price, stop_loss, ob.lower_price, is_buy=True
+            symbol, entry_price, stop_loss, ob.lower_price, is_buy=True
         )
 
         return TradeSignal(
@@ -183,8 +190,7 @@ class SMCScalper(StrategyBase):
 
         # Check if price is in FVG zone
         if not (fvg.lower_price <= current_price <= fvg.upper_price):
-            point = 0.1 if "XAU" in symbol else 0.0001
-            max_distance = 20 * point * 10
+            max_distance = self._pips_to_price(symbol, 20)
             if abs(current_price - fvg.mid_price) > max_distance:
                 return None
 
@@ -192,11 +198,11 @@ class SMCScalper(StrategyBase):
         entry_price = fvg.mid_price
 
         # Calculate stop loss
-        stop_loss = self._calculate_stop_loss(data, entry_price, is_buy=False)
+        stop_loss = self._calculate_stop_loss(data, symbol, entry_price, is_buy=False)
 
         # Calculate take profit
         take_profit = self._calculate_take_profit(
-            entry_price, stop_loss, ob.upper_price, is_buy=False
+            symbol, entry_price, stop_loss, ob.upper_price, is_buy=False
         )
 
         return TradeSignal(
@@ -213,11 +219,12 @@ class SMCScalper(StrategyBase):
     def _calculate_stop_loss(
         self,
         data: pd.DataFrame,
+        symbol: str,
         entry_price: float,
         is_buy: bool
     ) -> float:
         """Calculate stop loss based on ATR or fixed pips."""
-        point = 0.1 if "XAU" in data.iloc[-1].get("symbol", "XAUUSD") else 0.0001
+        point = self._point_for_symbol(symbol)
 
         if self.use_atr_sl and len(data) >= self.atr_period:
             atr = calculate_atr(data, self.atr_period)
@@ -228,7 +235,7 @@ class SMCScalper(StrategyBase):
             else:
                 return entry_price + atr_value
         else:
-            sl_distance = self.stop_loss_pips * point * 10
+            sl_distance = self._pips_to_price(symbol, self.stop_loss_pips)
 
             if is_buy:
                 return entry_price - sl_distance
@@ -237,6 +244,7 @@ class SMCScalper(StrategyBase):
 
     def _calculate_take_profit(
         self,
+        symbol: str,
         entry_price: float,
         stop_loss: float,
         order_block_level: float,
@@ -252,14 +260,12 @@ class SMCScalper(StrategyBase):
                 # Check if OB provides at least 1.5:1 RR
                 if distance_to_ob >= stop_distance * 1.5:
                     # Target 10 pips before order block
-                    point = 0.1  # Gold
-                    return order_block_level - (10 * point * 10)
+                    return order_block_level - self._pips_to_price(symbol, 10)
 
             elif not is_buy and order_block_level < entry_price:
                 distance_to_ob = entry_price - order_block_level
                 if distance_to_ob >= stop_distance * 1.5:
-                    point = 0.1
-                    return order_block_level + (10 * point * 10)
+                    return order_block_level + self._pips_to_price(symbol, 10)
 
         # Fall back to fixed R:R ratio
         if is_buy:
@@ -282,8 +288,7 @@ class SMCScalper(StrategyBase):
             return None
 
         current_price = data.iloc[-1]["close"]
-        point = 0.1 if "XAU" in position.symbol else 0.0001
-        trail_distance = self.trailing_pips * point * 10
+        trail_distance = self._pips_to_price(position.symbol, self.trailing_pips)
 
         if position.type == Signal.BUY:
             new_sl = current_price - trail_distance
@@ -299,7 +304,10 @@ class SMCScalper(StrategyBase):
 
     def _is_trading_time(self, data: pd.DataFrame) -> bool:
         """Check if current time is within trading session."""
-        current_time = data.iloc[-1]["time"]
+        if not self.use_time_filter:
+            return True
+
+        current_time = self._to_session_time(data.iloc[-1]["time"])
 
         if isinstance(current_time, pd.Timestamp):
             hour = current_time.hour
@@ -312,5 +320,23 @@ class SMCScalper(StrategyBase):
         if not self.trade_friday and weekday == 4:
             return False
 
-        # Hour check
-        return self.start_hour <= hour < self.end_hour
+        # Hour check (supports overnight windows)
+        if self.start_hour < self.end_hour:
+            return self.start_hour <= hour < self.end_hour
+        return hour >= self.start_hour or hour < self.end_hour
+
+    def _point_for_symbol(self, symbol: str) -> float:
+        if "XAU" in symbol or "GOLD" in symbol:
+            return 0.01
+        return 0.0001
+
+    def _pips_to_price(self, symbol: str, pips: float) -> float:
+        return pips * self._point_for_symbol(symbol) * 10
+
+    def _to_session_time(self, timestamp):
+        ts = pd.Timestamp(timestamp)
+        session_tz = ZoneInfo(self.session_timezone)
+        data_tz = ZoneInfo(self.data_timezone)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(data_tz)
+        return ts.tz_convert(session_tz)

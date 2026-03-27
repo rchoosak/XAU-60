@@ -33,9 +33,12 @@ parameters:
 
 risk:
   max_risk_percent: 2.0
-  lot_size: 0.01
+  lot_size: 0
 
 session:
+  use_time_filter: true
+  timezone: "UTC"
+  data_timezone: "UTC"
   start_hour: 8
   end_hour: 22
   trade_friday: false

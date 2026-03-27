@@ -78,7 +78,7 @@ class SMCAnalyzer:
         swing_lookback: int = 5,
         fvg_min_pips: float = 5.0,
         ob_displacement_factor: float = 2.0,
-        point: float = 0.1  # For gold
+        point: float = 0.01  # XAUUSD quote point
     ):
         """
         Initialize SMC analyzer.

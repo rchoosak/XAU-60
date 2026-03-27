@@ -15,10 +15,10 @@ warmup: 200                  # Initial bars to skip before trading
 # 2. EXECUTION MODE
 execution: strategy               # [strategy | bot]
 # strategies: "bollinger_reversion,trend_break_trauma,smc_scalper"
-strategy: "bollinger_reversion"
+strategy: "smc_scalper"
 
 # 3. TRADING / RISK PARAMETERS
-initial_balance: 1500.0
+initial_balance: 10000.0
 risk_per_trade: 0.01         # 1% risk per trade (auto lot calculation)
 max_open_trades: 1
 lot_size: 0                # Fallback if risk calculation not possible

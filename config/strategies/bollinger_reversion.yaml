@@ -1,6 +1,6 @@
 name: "Bollinger Reversion"
 version: "1.0.0"
-enabled: true
+enabled: false
 description: "Mean reversion strategy for sideways markets using Bollinger Bands and RSI"
 
 # initial balance : >= $1500

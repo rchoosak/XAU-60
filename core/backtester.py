@@ -192,12 +192,19 @@ class Backtester:
         if len(self.positions) < self.max_open_trades:
             sig = self.executor.analyze(self.symbol, history)
             if sig and sig.signal != Signal.HOLD:
-                lot_size = self._calculate_lot_size(self.balance, sig, self.point, candle["close"], self.positions, self.symbol)
+                fixed_lot = getattr(sig, "lot_size", 0.0) or 0.0
+                if fixed_lot > 0:
+                    lot_size = self._normalize_lot_size(fixed_lot)
+                else:
+                    lot_size = self._calculate_lot_size(self.balance, sig, self.point, candle["close"], self.positions, self.symbol)
                 if lot_size <= 0:
                     if self.log_signals:
                         logger.debug("Signal skipped due to non-positive calculated lot size")
                 else:
-                    entry_price = candle["close"] + (self.spread if sig.signal == Signal.BUY else -self.spread)
+                    base_entry = sig.entry_price
+                    if base_entry is None or pd.isna(base_entry) or float(base_entry) <= 0:
+                        base_entry = candle["close"]
+                    entry_price = float(base_entry) + (self.spread if sig.signal == Signal.BUY else -self.spread)
                     
                     sl = sig.stop_loss
                     tp = sig.take_profit
@@ -335,6 +342,18 @@ class Backtester:
         if min_lot > 0 and stepped < min_lot:
             return 0.0
 
+        decimals = max(2, len(f"{lot_step:.8f}".rstrip("0").split(".")[-1]))
+        return round(stepped, decimals)
+
+    def _normalize_lot_size(self, desired_lot: float) -> float:
+        """Clamp and quantize explicit lot size to broker-like lot rules."""
+        if desired_lot <= 0:
+            return 0.0
+        min_lot = float(self.min_lot)
+        lot_step = float(self.lot_step) if float(self.lot_step) > 0 else 0.01
+        stepped = round(float(desired_lot) / lot_step) * lot_step
+        if min_lot > 0 and stepped < min_lot:
+            return 0.0
         decimals = max(2, len(f"{lot_step:.8f}".rstrip("0").split(".")[-1]))
         return round(stepped, decimals)
 

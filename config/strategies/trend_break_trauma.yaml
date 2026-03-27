@@ -1,7 +1,7 @@
 # Trend Break + Trauma + RSI Strategy Configuration
 
 name: "Trend Break Trauma"
-enabled: true
+enabled: false
 description: "Trend line break with EMA filter and RSI-based exits"
 
 symbols:

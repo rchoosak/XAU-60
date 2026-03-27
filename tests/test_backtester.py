@@ -1,7 +1,10 @@
 from datetime import datetime
 
+import pandas as pd
+
 from core.backtester import Backtester
 from core.strategy_base import Signal
+from core.strategy_base import StrategyBase
 from core.strategy_base import TradeSignal
 
 
@@ -145,3 +148,77 @@ def test_backtester_respects_zero_risk_and_zero_default_lot():
         symbol="XAUUSD",
     )
     assert lot == 0.0
+
+
+class EntryPriceAndLotStrategy(StrategyBase):
+    name = "EntryPriceAndLot"
+
+    def __init__(self):
+        super().__init__()
+        self.fired = False
+
+    def initialize(self, config):
+        pass
+
+    def analyze(self, symbol, data):
+        if self.fired:
+            return None
+        self.fired = True
+        return TradeSignal(
+            signal=Signal.BUY,
+            symbol=symbol,
+            entry_price=90.0,
+            stop_loss=80.0,
+            take_profit=120.0,
+            lot_size=0.03,
+        )
+
+    def should_close(self, position, data):
+        return False
+
+
+def test_backtester_uses_signal_entry_price_and_fixed_lot_size():
+    bt = Backtester(
+        {
+            "warmup": 0,
+            "lookback": 10,
+            "save_trades": False,
+            "log_signals": False,
+            "use_trailing_stop": False,
+            "spread_pips": 0.0,
+            "commission": 0.0,
+            "min_lot": 0.01,
+            "lot_step": 0.01,
+            "risk_per_trade": 0.000001,
+            "lot_size": 0.0,
+        }
+    )
+    bt.data = pd.DataFrame(
+        [
+            {
+                "time": datetime(2026, 1, 1, 0, 0),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 1,
+            }
+        ]
+    )
+    bt.symbol = "XAUUSD"
+    bt.timeframe = "M15"
+    bt.executor = EntryPriceAndLotStrategy()
+    bt.current_index = 0
+    bt.balance = bt.initial_balance
+    bt.equity = bt.initial_balance
+    bt.positions = []
+    bt.trades = []
+    bt.point = 0.01
+    bt.spread = 0.0
+
+    state = bt.step()
+    assert state is not None
+    assert len(state["opened_positions"]) == 1
+    opened = state["opened_positions"][0]
+    assert opened["entry_price"] == 90.0
+    assert opened["lot_size"] == 0.03

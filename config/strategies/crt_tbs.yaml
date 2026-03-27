@@ -2,7 +2,7 @@ alerts:
   discord: true
   telegram: true
 description: Candle Range Theory with killzone entries and liquidity sweeps
-enabled: true
+enabled: false
 magic_number: 789789
 name: CRT TBS
 parameters:
