@@ -7,7 +7,7 @@ description: "Smart Money Concepts scalping with CHoCH, FVG, and Order Blocks"
 symbols:
   - XAUUSD
 
-timeframe: M1
+timeframe: S1
 magic_number: 789123
 
 parameters:

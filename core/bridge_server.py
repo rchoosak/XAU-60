@@ -24,6 +24,8 @@ from urllib.parse import parse_qs, urlparse
 
 
 # MT5 constants mirrored from the official Python package.
+# For S1 we pass a symbolic token that the EA maps to PERIOD_S1.
+TIMEFRAME_S1 = "S1"
 TIMEFRAME_M1 = 1
 TIMEFRAME_M5 = 5
 TIMEFRAME_M15 = 15
@@ -298,6 +300,7 @@ class BridgeServer:
     Drop-in MT5-like client backed by the EA bridge.
     """
 
+    TIMEFRAME_S1 = TIMEFRAME_S1
     TIMEFRAME_M1 = TIMEFRAME_M1
     TIMEFRAME_M5 = TIMEFRAME_M5
     TIMEFRAME_M15 = TIMEFRAME_M15
@@ -416,7 +419,7 @@ class BridgeServer:
         response = self._call("symbol_info_tick", symbol=symbol)
         return _to_namespace(response.get("result"))
 
-    def copy_rates_from(self, symbol: str, timeframe: int, date_from: Any, count: int) -> Optional[List[Dict[str, Any]]]:
+    def copy_rates_from(self, symbol: str, timeframe: Any, date_from: Any, count: int) -> Optional[List[Dict[str, Any]]]:
         response = self._call(
             "copy_rates_from",
             symbol=symbol,
@@ -426,7 +429,7 @@ class BridgeServer:
         )
         return response.get("result")
 
-    def copy_rates_from_pos(self, symbol: str, timeframe: int, start_pos: int, count: int) -> Optional[List[Dict[str, Any]]]:
+    def copy_rates_from_pos(self, symbol: str, timeframe: Any, start_pos: int, count: int) -> Optional[List[Dict[str, Any]]]:
         response = self._call(
             "copy_rates_from_pos",
             symbol=symbol,
@@ -436,7 +439,7 @@ class BridgeServer:
         )
         return response.get("result")
 
-    def copy_rates_range(self, symbol: str, timeframe: int, date_from: Any, date_to: Any) -> Optional[List[Dict[str, Any]]]:
+    def copy_rates_range(self, symbol: str, timeframe: Any, date_from: Any, date_to: Any) -> Optional[List[Dict[str, Any]]]:
         response = self._call(
             "copy_rates_range",
             symbol=symbol,

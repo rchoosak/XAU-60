@@ -112,6 +112,7 @@ class MT5Connector:
     """
 
     # Timeframe mapping
+    _TIMEFRAME_S1 = getattr(mt5, "TIMEFRAME_S1", None)
     TIMEFRAMES = {
         "M1": mt5.TIMEFRAME_M1,
         "M5": mt5.TIMEFRAME_M5,
@@ -123,6 +124,8 @@ class MT5Connector:
         "W1": mt5.TIMEFRAME_W1,
         "MN1": mt5.TIMEFRAME_MN1,
     }
+    if _TIMEFRAME_S1 is not None:
+        TIMEFRAMES["S1"] = _TIMEFRAME_S1
 
     def __init__(self):
         """Initialize MT5 connector."""
@@ -283,7 +286,7 @@ class MT5Connector:
 
         Args:
             symbol: Symbol name
-            timeframe: Timeframe string (M1, M5, M15, M30, H1, H4, D1, W1, MN1)
+            timeframe: Timeframe string (S1, M1, M5, M15, M30, H1, H4, D1, W1, MN1)
             count: Number of bars to retrieve
             start_time: Start time for historical data
 

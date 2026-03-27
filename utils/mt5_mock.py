@@ -25,6 +25,7 @@ def _current_time_msc() -> int:
 # ============================================================================
 
 # Timeframes
+TIMEFRAME_S1 = "S1"
 TIMEFRAME_M1 = 1
 TIMEFRAME_M5 = 5
 TIMEFRAME_M15 = 15
@@ -272,11 +273,27 @@ class MockState:
         base["ask"] = base["bid"] + (base["ask"] - base["bid"])
         return base
 
-    def generate_ohlcv(self, symbol: str, timeframe: int, count: int,
+    @staticmethod
+    def _timeframe_seconds(timeframe: Any) -> int:
+        if isinstance(timeframe, str):
+            tf = timeframe.strip().upper()
+            if tf in {"S1", "1S"}:
+                return 1
+            try:
+                timeframe = int(tf)
+            except ValueError:
+                return 60
+        if isinstance(timeframe, (int, float)):
+            # Existing constants are minute-based numbers (1,5,15,...).
+            return max(1, int(timeframe)) * 60
+        return 60
+
+    def generate_ohlcv(self, symbol: str, timeframe: Any, count: int,
                        start_time: Optional[datetime] = None) -> np.ndarray:
         """Generate synthetic OHLCV data."""
+        step_seconds = self._timeframe_seconds(timeframe)
         if start_time is None:
-            start_time = datetime.now() - timedelta(minutes=count * timeframe)
+            start_time = datetime.now() - timedelta(seconds=count * step_seconds)
 
         price_info = self.get_symbol_price(symbol)
         base_price = price_info["bid"]
@@ -291,7 +308,7 @@ class MockState:
 
         current_price = base_price
         for i in range(count):
-            bar_time = start_time + timedelta(minutes=i * timeframe)
+            bar_time = start_time + timedelta(seconds=i * step_seconds)
 
             # Random walk
             change = random.uniform(-0.002, 0.002) * current_price
@@ -412,27 +429,28 @@ def symbol_select(symbol: str, enable: bool = True) -> bool:
     return True
 
 
-def copy_rates_from(symbol: str, timeframe: int, date_from: datetime, count: int) -> Optional[np.ndarray]:
+def copy_rates_from(symbol: str, timeframe: Any, date_from: datetime, count: int) -> Optional[np.ndarray]:
     """Copy rates starting from specified date."""
     if not _state.connected:
         return None
     return _state.generate_ohlcv(symbol, timeframe, count, date_from)
 
 
-def copy_rates_from_pos(symbol: str, timeframe: int, start_pos: int, count: int) -> Optional[np.ndarray]:
+def copy_rates_from_pos(symbol: str, timeframe: Any, start_pos: int, count: int) -> Optional[np.ndarray]:
     """Copy rates from specified position."""
     if not _state.connected:
         return None
     return _state.generate_ohlcv(symbol, timeframe, count)
 
 
-def copy_rates_range(symbol: str, timeframe: int, date_from: datetime, date_to: datetime) -> Optional[np.ndarray]:
+def copy_rates_range(symbol: str, timeframe: Any, date_from: datetime, date_to: datetime) -> Optional[np.ndarray]:
     """Copy rates within time range."""
     if not _state.connected:
         return None
 
     delta = date_to - date_from
-    count = int(delta.total_seconds() / (timeframe * 60)) + 1
+    step_seconds = _state._timeframe_seconds(timeframe)
+    count = int(delta.total_seconds() / step_seconds) + 1
     return _state.generate_ohlcv(symbol, timeframe, count, date_from)
 
 
