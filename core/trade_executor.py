@@ -9,6 +9,7 @@ from loguru import logger
 from .mt5_connector import MT5Connector
 from .strategy_base import Signal, TradeSignal, Position
 from .risk_manager import RiskManager
+from utils.trade_journal import append_trade_event
 
 
 @dataclass
@@ -150,6 +151,22 @@ class TradeExecutor:
                 f"Trade opened: {signal.signal.name} {lot_size} {signal.symbol} "
                 f"@ {signal.entry_price} | SL: {signal.stop_loss} | TP: {signal.take_profit}"
             )
+            append_trade_event({
+                "mode": "live",
+                "event": "OPEN",
+                "ticket": ticket,
+                "symbol": signal.symbol,
+                "strategy": strategy_name or "unknown",
+                "side": signal.signal.name,
+                "entry_price": signal.entry_price,
+                "stop_loss": signal.stop_loss,
+                "take_profit": signal.take_profit,
+                "lot_size": lot_size,
+                "magic_number": magic,
+                "comment": signal.comment,
+                "reason": "Signal execution",
+                "open_time": record.open_time,
+            })
             return ticket
 
         return None
@@ -195,6 +212,23 @@ class TradeExecutor:
 
                 # Record for risk manager
                 self.risk_manager.record_trade_result(position.profit)
+                append_trade_event({
+                    "mode": "live",
+                    "event": "CLOSE",
+                    "ticket": ticket,
+                    "symbol": record.symbol,
+                    "strategy": record.strategy or "unknown",
+                    "side": record.signal.name,
+                    "entry_price": record.entry_price,
+                    "exit_price": record.close_price,
+                    "stop_loss": record.stop_loss,
+                    "take_profit": record.take_profit,
+                    "lot_size": record.lot_size,
+                    "profit": record.profit,
+                    "reason": reason,
+                    "open_time": record.open_time,
+                    "close_time": record.close_time,
+                })
 
             logger.info(f"Trade closed: {ticket} | Reason: {reason} | P&L: {position.profit}")
             return True

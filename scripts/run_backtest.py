@@ -44,66 +44,118 @@ def _normalize_strategy_list(raw_value):
     return []
 
 
+def _normalize_config_keys(config_data):
+    if not config_data:
+        return {}
+    return {k.replace("-", "_"): v for k, v in config_data.items()}
+
+
+def _resolve_effective_args(args_dict):
+    """
+    Resolve runtime args with latest config file content (if provided),
+    then apply original CLI overrides on top.
+    """
+    resolved = dict(args_dict)
+    config_path = resolved.get("_config_path")
+    cli_overrides = resolved.get("_cli_overrides", {})
+
+    if config_path and os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            config_data = _normalize_config_keys(yaml.safe_load(f) or {})
+        resolved = {**config_data, **cli_overrides}
+        resolved["_config_path"] = config_path
+        resolved["_cli_overrides"] = dict(cli_overrides)
+
+    if resolved.get("strategies") is not None:
+        resolved["strategies"] = _normalize_strategy_list(resolved.get("strategies"))
+
+    return resolved
+
+
+def _build_executor(loader: StrategyLoader, args_dict):
+    execution = args_dict.get("execution", "strategy") or "strategy"
+
+    if execution == "strategy":
+        strategy_name = args_dict.get("strategy")
+        if not strategy_name:
+            return None, "Execution mode 'strategy' requires --strategy or config value 'strategy'"
+        strategy = loader.load_strategy(strategy_name)
+        if not strategy:
+            return None, f"Strategy {strategy_name} not found"
+        return strategy, None
+
+    strategy_names = _normalize_strategy_list(args_dict.get("strategies"))
+    strategies = []
+    for name in strategy_names:
+        s = loader.load_strategy(name)
+        if s:
+            strategies.append(s)
+
+    if not strategies:
+        return None, "No valid strategies found for bot mode"
+
+    return BotEngine(strategies, args_dict), None
+
+
+def _build_backtester(args_dict, loader):
+    symbol = args_dict.get("symbol", "XAUUSD")
+    timeframe = args_dict.get("timeframe", "M15")
+    start = _parse_date(args_dict.get("start"))
+    end = _parse_date(args_dict.get("end"))
+    mode = args_dict.get("mode", "real") or "real"
+
+    if args_dict.get("tui"):
+        # TUI already prints open/close events; debug logging is expensive.
+        args_dict.setdefault("log_signals", False)
+    backtester = Backtester(args_dict)
+
+    executor, err = _build_executor(loader, args_dict)
+    if err:
+        return None, None, err
+
+    return backtester, (symbol, timeframe, start, end, mode, executor), None
+
+
 def run_single_backtest(args_dict):
     """Function to be run in a separate process."""
     try:
         loader = _get_loader()
-        
-        symbol = args_dict.get("symbol", "XAUUSD")
-        timeframe = args_dict.get("timeframe", "M15")
-        start = _parse_date(args_dict.get("start"))
-        end = _parse_date(args_dict.get("end"))
-        
-        mode = args_dict.get("mode", "real") or "real"
-        execution = args_dict.get("execution", "strategy") or "strategy"
-        
-        # Initialize Backtester with all args
-        if args_dict.get("tui"):
-            # TUI already prints open/close events; debug logging is expensive.
-            args_dict.setdefault("log_signals", False)
-        backtester = Backtester(args_dict)
-        
-        if execution == "strategy":
-            strategy_name = args_dict.get("strategy")
-            if not strategy_name:
-                return {"error": "Execution mode 'strategy' requires --strategy or config value 'strategy'"}
-            strategy = loader.load_strategy(strategy_name)
-            if not strategy:
-                return {"error": f"Strategy {strategy_name} not found"}
-            executor = strategy
-        else:
-            strategy_names = _normalize_strategy_list(args_dict.get("strategies"))
-                
-            strategies = []
-            for name in strategy_names:
-                s = loader.load_strategy(name)
-                if s:
-                    strategies.append(s)
+        effective_args = _resolve_effective_args(args_dict)
+        backtester, run_ctx, err = _build_backtester(effective_args, loader)
+        if err:
+            return {"error": err}
+        symbol, timeframe, start, end, mode, executor = run_ctx
             
-            if not strategies:
-                return {"error": "No valid strategies found for bot mode"}
-            
-            # Initialize BotEngine with specific bot args
-            executor = BotEngine(strategies, args_dict)
-            
-        if args_dict.get("tui"):
+        if effective_args.get("tui"):
             from core.tui_app import BacktestTUI
             backtester.start_simulation(symbol, timeframe, start, end, executor, mode=mode)
-            tui_steps = args_dict.get("tui_steps") or 20
-            tui_interval = args_dict.get("tui_interval") or 0.05
+
+            def reload_backtest_state():
+                updated_args = _resolve_effective_args(effective_args)
+                new_backtester, new_ctx, reload_err = _build_backtester(updated_args, loader)
+                if reload_err:
+                    return None, reload_err
+                rsymbol, rtf, rstart, rend, rmode, rexecutor = new_ctx
+                new_backtester.start_simulation(rsymbol, rtf, rstart, rend, rexecutor, mode=rmode)
+                return new_backtester, "Config reloaded and simulation restarted."
+
+            tui_steps = effective_args.get("tui_steps") or 20
+            tui_interval = effective_args.get("tui_interval") or 0.05
             tui = BacktestTUI(
                 backtester,
                 steps_per_tick=tui_steps,
-                update_interval=tui_interval
+                update_interval=tui_interval,
+                reload_callback=reload_backtest_state,
             )
             tui.run()
+            backtester = tui.backtester
             # After TUI closes, calculate metrics
             result = backtester._calculate_metrics(backtester.trades, backtester.balance, backtester.equity_curve)
         else:
             result = backtester.run(symbol, timeframe, start, end, executor, mode=mode)
         return {
             "symbol": symbol,
-            "strategy": args_dict.get("strategy") or args_dict.get("strategies"),
+            "strategy": effective_args.get("strategy") or effective_args.get("strategies"),
             "result": result
         }
     except Exception as e:
@@ -140,22 +192,22 @@ def main():
 
     args = parser.parse_args()
     args_dict = vars(args)
+    cli_overrides = {k: v for k, v in args_dict.items() if v is not None and k != "config"}
+    config_path = args.config
 
     if args.config:
         if os.path.exists(args.config):
             with open(args.config, "r") as f:
                 config_data = yaml.safe_load(f)
                 if config_data:
-                    # Clean up keys: replace - with _ for compatibility
-                    config_data = {k.replace("-", "_"): v for k, v in config_data.items()}
-                    
                     # Merge logic: YAML values are defaults, CLI overrides
-                    cli_overrides = {k: v for k, v in args_dict.items() if v is not None and k != "config"}
-                    args_dict = {**config_data, **cli_overrides}
+                    args_dict = {**_normalize_config_keys(config_data), **cli_overrides}
         else:
             logger.error(f"Config file not found: {args.config}")
             sys.exit(1)
 
+    args_dict["_config_path"] = config_path
+    args_dict["_cli_overrides"] = cli_overrides
     if args_dict.get("strategies") is not None:
         args_dict["strategies"] = _normalize_strategy_list(args_dict.get("strategies"))
     

@@ -8,6 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from .strategy_base import StrategyBase, Signal, TradeSignal, Position
 from .bot_engine import BotEngine
+from utils.trade_journal import append_trade_event
 
 class Backtester:
     """
@@ -17,35 +18,45 @@ class Backtester:
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
+
+        def _cfg(name: str, default: Any) -> Any:
+            value = self.config.get(name)
+            return default if value is None else value
         
         # Primary Parameters
-        self.initial_balance = self.config.get("initial_balance") or 10000.0
-        self.spread_pips = self.config.get("spread_pips") or 2.0
-        self.commission = self.config.get("commission") or 7.0
-        self.leverage = self.config.get("leverage") or 100.0
-        self.slippage = self.config.get("slippage") or 0.0001
-        self.data_dir = self.config.get("data_path") or "data/backtest-db"
+        self.initial_balance = float(_cfg("initial_balance", 10000.0))
+        self.spread_pips = float(_cfg("spread_pips", 2.0))
+        self.commission = float(_cfg("commission", 7.0))
+        self.leverage = float(_cfg("leverage", 100.0))
+        if self.leverage <= 0:
+            self.leverage = 100.0
+        self.slippage = float(_cfg("slippage", 0.0001))
+        self.data_dir = _cfg("data_path", "data/backtest-db")
         
         # Risk Parameters
-        self.risk_per_trade = self.config.get("risk_per_trade") or 0.01
-        self.max_open_trades = self.config.get("max_open_trades") or 3
-        self.default_lot_size = self.config.get("lot_size") or 0.1
+        self.risk_per_trade = float(_cfg("risk_per_trade", 0.01))
+        self.max_open_trades = int(_cfg("max_open_trades", 3))
+        self.default_lot_size = float(_cfg("lot_size", 0.1))
+        self.min_lot = float(_cfg("min_lot", 0.01))
+        self.lot_step = float(_cfg("lot_step", 0.01))
+        if self.lot_step <= 0:
+            self.lot_step = 0.01
         
         # Position Management
         self.use_trailing_stop = self.config.get("use_trailing_stop")
         if self.use_trailing_stop is None: self.use_trailing_stop = True
-        self.trailing_stop_pips = self.config.get("trailing_stop_pips") or 50.0
-        self.tp_multiplier = self.config.get("tp_multiplier") or 1.0
-        self.sl_multiplier = self.config.get("sl_multiplier") or 1.0
+        self.trailing_stop_pips = float(_cfg("trailing_stop_pips", 50.0))
+        self.tp_multiplier = float(_cfg("tp_multiplier", 1.0))
+        self.sl_multiplier = float(_cfg("sl_multiplier", 1.0))
         
         # Execution / Data
-        self.lookback = self.config.get("lookback") or 100
-        self.warmup = self.config.get("warmup") or 200
+        self.lookback = int(_cfg("lookback", 100))
+        self.warmup = int(_cfg("warmup", 200))
         
         # Logging / Output
         self.save_trades = self.config.get("save_trades")
         if self.save_trades is None: self.save_trades = True
-        self.output_csv = self.config.get("output") or "trades.csv"
+        self.output_csv = _cfg("output", "trades.csv")
         self.log_signals = self.config.get("log_signals")
         if self.log_signals is None: self.log_signals = True
         
@@ -59,6 +70,7 @@ class Backtester:
         self.equity_curve: List[float] = []
         self.executor: Optional[Union[StrategyBase, BotEngine]] = None
         self.symbol = ""
+        self.timeframe = ""
         self.point = 0.01
         self.spread = 0.0
 
@@ -117,6 +129,7 @@ class Backtester:
             raise ValueError("No data found for backtest")
 
         self.symbol = symbol
+        self.timeframe = timeframe
         self.executor = executor
         self.current_index = self.warmup
         self.balance = self.initial_balance
@@ -158,6 +171,21 @@ class Backtester:
                 self.balance += closed_trade["profit"]
                 self.trades.append(closed_trade)
                 closed_trades.append(closed_trade)
+                append_trade_event({
+                    "mode": "backtest",
+                    "event": "CLOSE",
+                    "symbol": self.symbol,
+                    "timeframe": self.timeframe,
+                    "strategy": closed_trade.get("strategy", "unknown"),
+                    "side": closed_trade["signal"],
+                    "entry_price": closed_trade["entry_price"],
+                    "exit_price": closed_trade["exit_price"],
+                    "lot_size": closed_trade["lot_size"],
+                    "profit": closed_trade["profit"],
+                    "reason": closed_trade["reason"],
+                    "open_time": closed_trade["entry_time"],
+                    "close_time": closed_trade["exit_time"],
+                })
                 self.positions.remove(pos)
 
         # 2. Check for new signals
@@ -165,29 +193,50 @@ class Backtester:
             sig = self.executor.analyze(self.symbol, history)
             if sig and sig.signal != Signal.HOLD:
                 lot_size = self._calculate_lot_size(self.balance, sig, self.point, candle["close"], self.positions, self.symbol)
-                entry_price = candle["close"] + (self.spread if sig.signal == Signal.BUY else -self.spread)
-                
-                sl = sig.stop_loss
-                tp = sig.take_profit
-                if self.sl_multiplier != 1.0:
-                    risk = abs(entry_price - sl)
-                    sl = entry_price - (risk * self.sl_multiplier) if sig.signal == Signal.BUY else entry_price + (risk * self.sl_multiplier)
-                if self.tp_multiplier != 1.0:
-                    reward = abs(tp - entry_price)
-                    tp = entry_price + (reward * self.tp_multiplier) if sig.signal == Signal.BUY else entry_price - (reward * self.tp_multiplier)
+                if lot_size <= 0:
+                    if self.log_signals:
+                        logger.debug("Signal skipped due to non-positive calculated lot size")
+                else:
+                    entry_price = candle["close"] + (self.spread if sig.signal == Signal.BUY else -self.spread)
+                    
+                    sl = sig.stop_loss
+                    tp = sig.take_profit
+                    if self.sl_multiplier != 1.0:
+                        risk = abs(entry_price - sl)
+                        sl = entry_price - (risk * self.sl_multiplier) if sig.signal == Signal.BUY else entry_price + (risk * self.sl_multiplier)
+                    if self.tp_multiplier != 1.0:
+                        reward = abs(tp - entry_price)
+                        tp = entry_price + (reward * self.tp_multiplier) if sig.signal == Signal.BUY else entry_price - (reward * self.tp_multiplier)
 
-                self.positions.append({
-                    "signal": sig.signal,
-                    "entry_price": entry_price,
-                    "stop_loss": sl,
-                    "take_profit": tp,
-                    "entry_time": candle["time"],
-                    "lot_size": lot_size,
-                    "high_water_mark": entry_price
-                })
-                opened_positions.append(self.positions[-1].copy())
-                if self.log_signals:
-                    logger.debug(f"Signal: {sig.signal.name} at {entry_price}")
+                    self.positions.append({
+                        "signal": sig.signal,
+                        "entry_price": entry_price,
+                        "stop_loss": sl,
+                        "take_profit": tp,
+                        "entry_time": candle["time"],
+                        "lot_size": lot_size,
+                        "high_water_mark": entry_price,
+                        "strategy": self._strategy_label(sig),
+                        "signal_comment": getattr(sig, "comment", ""),
+                    })
+                    opened_positions.append(self.positions[-1].copy())
+                    append_trade_event({
+                        "mode": "backtest",
+                        "event": "OPEN",
+                        "symbol": self.symbol,
+                        "timeframe": self.timeframe,
+                        "strategy": self.positions[-1]["strategy"],
+                        "side": sig.signal.name,
+                        "entry_price": entry_price,
+                        "stop_loss": sl,
+                        "take_profit": tp,
+                        "lot_size": lot_size,
+                        "reason": "Signal execution",
+                        "open_time": candle["time"],
+                        "signal_comment": getattr(sig, "comment", ""),
+                    })
+                    if self.log_signals:
+                        logger.debug(f"Signal: {sig.signal.name} at {entry_price}")
 
         # Update equity
         total_unrealized_pnl = 0
@@ -238,20 +287,27 @@ class Backtester:
     def _calculate_lot_size(self, balance: float, sig: TradeSignal, point: float, current_price: float, positions: List[Dict], symbol: str) -> float:
         """Risk per trade % based lot calculation with leverage/margin limit."""
         if sig.stop_loss == 0 or sig.entry_price == sig.stop_loss:
-            return self.default_lot_size
+            return max(0.0, self.default_lot_size)
+
+        if self.risk_per_trade <= 0:
+            return max(0.0, self.default_lot_size)
         
         # 1. Calculate risk-based lot
         risk_amount = balance * self.risk_per_trade
+        if risk_amount <= 0:
+            return max(0.0, self.default_lot_size)
         sl_pips = abs(sig.entry_price - sig.stop_loss) / point
-        if sl_pips == 0: return self.default_lot_size
+        if sl_pips == 0:
+            return max(0.0, self.default_lot_size)
         
-        # 1 lot, 1 pip Gold = $10 (0.1 point), Forex = $10 (0.0001)
-        lot = risk_amount / (sl_pips * 10)
+        contract_size = 100 if "XAU" in symbol else 100000
+        pip_value_per_lot = contract_size * point
+        if pip_value_per_lot <= 0:
+            return 0.0
+
+        lot = risk_amount / (sl_pips * pip_value_per_lot)
         
         # 2. Leverage/Margin Check
-        # Contract size (Standard: 100,000 for Forex, 100 for Gold)
-        contract_size = 100 if "XAU" in symbol else 100000
-        
         # Current margin used by open positions
         used_margin = 0
         for pos in positions:
@@ -267,10 +323,20 @@ class Backtester:
         # Cap lot size based on margin (leave 10% buffer for spread/volatility)
         final_lot = min(lot, max_lot_margin * 0.9)
         
-        if final_lot < 0.01:
-            return 0.01 # minimum lot
-            
-        return round(final_lot, 2)
+        min_lot = float(self.min_lot)
+        lot_step = float(self.lot_step) if float(self.lot_step) > 0 else 0.01
+        if final_lot <= 0:
+            return 0.0
+
+        if min_lot > 0 and final_lot < min_lot:
+            return 0.0
+
+        stepped = round(final_lot / lot_step) * lot_step
+        if min_lot > 0 and stepped < min_lot:
+            return 0.0
+
+        decimals = max(2, len(f"{lot_step:.8f}".rstrip("0").split(".")[-1]))
+        return round(stepped, decimals)
 
     def _update_trailing_stop(self, pos: Dict, candle: pd.Series, point: float) -> Dict:
         trail_dist = self.trailing_stop_pips * point
@@ -320,12 +386,21 @@ class Backtester:
             "entry_time": pos["entry_time"],
             "exit_time": exit_time,
             "signal": pos["signal"].name,
+            "strategy": pos.get("strategy", "unknown"),
             "entry_price": pos["entry_price"],
             "exit_price": exit_price,
             "lot_size": pos["lot_size"],
             "profit": round(profit, 2),
             "reason": reason
         }
+
+    def _strategy_label(self, sig: TradeSignal) -> str:
+        if isinstance(self.executor, StrategyBase):
+            return self.executor.name
+        comment = getattr(sig, "comment", "") or ""
+        if "_" in comment:
+            return comment.split("_", 1)[0]
+        return self.executor.__class__.__name__ if self.executor is not None else "unknown"
 
     def _calculate_metrics(self, trades: List[Dict], balance: float, equity: List[float]) -> Dict[str, Any]:
         if not trades: return {"profit": 0, "trades": 0}

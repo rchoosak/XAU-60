@@ -2,6 +2,7 @@ import pandas as pd
 from typing import Dict, Any, Optional
 from loguru import logger
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from core.strategy_base import StrategyBase, TradeSignal, Signal, Position
 from indicators.common import calculate_bollinger_bands, calculate_rsi
@@ -49,6 +50,8 @@ class BollingerReversion(StrategyBase):
         self.start_hour = 2
         self.end_hour = 10
         self.trade_friday = True
+        self.session_timezone = "UTC"
+        self.data_timezone = "UTC"
         
         self.magic_number = 789555
         
@@ -75,6 +78,8 @@ class BollingerReversion(StrategyBase):
         self.start_hour = session.get("start_hour", 2)
         self.end_hour = session.get("end_hour", 10)
         self.trade_friday = session.get("trade_friday", True)
+        self.session_timezone = session.get("timezone", "UTC")
+        self.data_timezone = session.get("data_timezone", "UTC")
         
         self.symbols = config.get("symbols", ["XAUUSD"])
         self.timeframe = config.get("timeframe", "M15")
@@ -117,7 +122,7 @@ class BollingerReversion(StrategyBase):
             # Confirm bounce: Price is closing bullish (close > open)
             if current_close > current_open:
                 return self._create_signal(
-                    Signal.BUY, symbol, current_close, curr_lower, curr_mid
+                    Signal.BUY, symbol, current_close, curr_mid
                 )
                 
         # SELL LOGIC: Price poked upper band and RSI is overbought
@@ -125,13 +130,13 @@ class BollingerReversion(StrategyBase):
             # Confirm rejection: Price is closing bearish (close < open)
             if current_close < current_open:
                 return self._create_signal(
-                    Signal.SELL, symbol, current_close, curr_upper, curr_mid
+                    Signal.SELL, symbol, current_close, curr_mid
                 )
                 
         return None
         
-    def _create_signal(self, direction: Signal, symbol: str, entry_price: float, band_price: float, mid_band: float) -> TradeSignal:
-        point = 0.1 if "XAU" in symbol else 0.0001
+    def _create_signal(self, direction: Signal, symbol: str, entry_price: float, mid_band: float) -> TradeSignal:
+        point = 0.01 if "XAU" in symbol else 0.0001
         
         if direction == Signal.BUY:
             stop_loss = entry_price - (self.stop_loss_pips * point * 10)
@@ -186,7 +191,7 @@ class BollingerReversion(StrategyBase):
         return None
         
     def _is_trading_time(self, data: pd.DataFrame) -> bool:
-        current_time = data.iloc[-1]["time"]
+        current_time = self._to_session_time(data.iloc[-1]["time"])
         hour = current_time.hour if hasattr(current_time, 'hour') else 0
         weekday = current_time.weekday() if hasattr(current_time, 'weekday') else 0
         
@@ -197,3 +202,11 @@ class BollingerReversion(StrategyBase):
             return self.start_hour <= hour < self.end_hour
         else: 
             return hour >= self.start_hour or hour < self.end_hour
+
+    def _to_session_time(self, timestamp):
+        ts = pd.Timestamp(timestamp)
+        session_tz = ZoneInfo(self.session_timezone)
+        data_tz = ZoneInfo(self.data_timezone)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(data_tz)
+        return ts.tz_convert(session_tz)

@@ -5,30 +5,32 @@
 # 1. DATA PARAMETERS
 mode: real                   # [real | random]
 symbol: XAUUSD
-timeframe: M5
-start: "2025-01-01"
+timeframe: M15
+start: "2020-01-01"
 end: "2026-03-23"
-data_path: data/backtest-db/xauusd-m5-bid-2020-01-01-2026-03-24.parquet
+data_path: data/backtest-db/xauusd-m15-bid-2020-01-01-2026-03-24.parquet
 lookback: 100                # Bars to provide to strategy for analysis
 warmup: 200                  # Initial bars to skip before trading
 
 # 2. EXECUTION MODE
 execution: strategy               # [strategy | bot]
 # strategies: "bollinger_reversion,trend_break_trauma,smc_scalper"
-strategy: "smc_scalper"
+strategy: "bollinger_reversion"
 
 # 3. TRADING / RISK PARAMETERS
-initial_balance: 1000.0
-risk_per_trade: 0.005         # 1% risk per trade (auto lot calculation)
-max_open_trades: 2
-lot_size: 0.1                # Fallback if risk calculation not possible
+initial_balance: 5000.0
+risk_per_trade: 0.01         # 1% risk per trade (auto lot calculation)
+max_open_trades: 1
+lot_size: 0                # Fallback if risk calculation not possible
+min_lot: 0.01              # Broker-like minimum lot
+lot_step: 0.01             # Broker-like lot increment
 spread_pips: 5.0
 commission: 7.0              # $7 per lot round turn
 leverage: 100.0              # 1:100 leverage
 slippage: 0.3
 
 # 4. POSITION MANAGEMENT
-use_trailing_stop: true
+use_trailing_stop: false
 trailing_stop_pips: 50.0
 tp_multiplier: 1.0           # Multiplier for strategy's TP
 sl_multiplier: 1.0           # Multiplier for strategy's SL

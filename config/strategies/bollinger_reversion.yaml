@@ -20,18 +20,20 @@ parameters:
   rsi_oversold: 30.0
 
 risk:
-  stop_loss_pips: 100.0
+  stop_loss_pips: 120.0
   take_profit_pips: 300.0  # Fallback TP if mid band is too close
   use_dynamic_tp: true     # TP will adapt to the Middle Band (Mean Reversion)
   trailing_stop: false
   trailing_pips: 30.0
   max_risk_percent: 2.0
-  lot_size: 0.01
+  lot_size: 0
 
 session:
   use_time_filter: true
-  start_hour: 2            # Asian session is typically sideways (02:00 MT5 -> 07:00 Thai)
-  end_hour: 10             # Stops trading before London volume picks up heavily
+  timezone: "UTC"            # Session window timezone used by strategy
+  data_timezone: "UTC"       # Timezone of incoming candle timestamps when timestamps are naive
+  start_hour: 10
+  end_hour: 13
   trade_friday: true
 
 alerts:

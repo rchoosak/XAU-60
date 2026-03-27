@@ -37,6 +37,9 @@ class BacktestInfoWidget(Static):
         self.backtester = backtester
 
     def on_mount(self):
+        self.refresh_info()
+
+    def refresh_info(self):
         table = Table.grid(expand=True)
         table.add_column("Key", style="cyan")
         table.add_column("Value", style="bold white")
@@ -116,9 +119,17 @@ class BacktestTUI(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("p", "toggle_pause", "Pause/Resume"),
+        Binding("r", "reload_config", "Restart"),
     ]
 
-    def __init__(self, backtester, steps_per_tick: int = 20, update_interval: float = 0.05, **kwargs):
+    def __init__(
+        self,
+        backtester,
+        steps_per_tick: int = 20,
+        update_interval: float = 0.05,
+        reload_callback=None,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.backtester = backtester
         self.paused = False
@@ -126,6 +137,8 @@ class BacktestTUI(App):
         self.last_trade_count = 0
         self.steps_per_tick = max(1, int(steps_per_tick))
         self.update_interval = max(0.01, float(update_interval))
+        self.reload_callback = reload_callback
+        self.finished_logged = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -133,8 +146,8 @@ class BacktestTUI(App):
         yield Container(
             Vertical(
                 Horizontal(
-                    BacktestInfoWidget(self.backtester),
-                    StatsWidget(self.backtester),
+                    BacktestInfoWidget(self.backtester, id="backtest-info"),
+                    StatsWidget(self.backtester, id="stats-widget"),
                     id="info-section"
                 ),
                 DataTable(id="positions-table"),
@@ -156,6 +169,23 @@ class BacktestTUI(App):
         sig_log.write(Text("Backtest Simulation Started..."))
         
         self.set_interval(self.update_interval, self.tick)
+
+    def _sync_backtester_refs(self):
+        self.query_one("#controls", ControlWidget).backtester = self.backtester
+        info = self.query_one("#backtest-info", BacktestInfoWidget)
+        info.backtester = self.backtester
+        info.refresh_info()
+        self.query_one("#stats-widget", StatsWidget).backtester = self.backtester
+
+    @staticmethod
+    def _format_lot(lot: float) -> str:
+        val = float(lot)
+        if val >= 0.01:
+            return f"{val:.2f}"
+        if val <= 0:
+            return "0"
+        # For micro lots in backtest mode
+        return f"{val:.6f}".rstrip("0").rstrip(".")
 
     def tick(self):
         if self.paused:
@@ -194,7 +224,7 @@ class BacktestTUI(App):
             side_text = Text(side_name, style="green" if side_name == "BUY" else "red")
             line = Text(f"[{entry_time_str}] OPEN ")
             line.append_text(side_text)
-            line.append(f" at {pos['entry_price']:.2f} (Lot: {pos['lot_size']:.2f})")
+            line.append(f" at {pos['entry_price']:.2f} (Lot: {self._format_lot(pos['lot_size'])})")
             sig_log.write(line)
         for trade in closed_events:
             trade_time = trade.get("exit_time")
@@ -227,7 +257,7 @@ class BacktestTUI(App):
             table.add_row(
                 str(i),
                 Text(pos["signal"].name, style="green" if pos["signal"].name == "BUY" else "red"),
-                f"{pos['lot_size']:.2f}",
+                self._format_lot(pos["lot_size"]),
                 f"{pos['entry_price']:.2f}",
                 f"{pos['stop_loss']:.2f}",
                 f"{pos['take_profit']:.2f}",
@@ -238,3 +268,29 @@ class BacktestTUI(App):
         self.paused = not self.paused
         sig_log = self.query_one("#signal-history", RichLog)
         sig_log.write(Text("PAUSED" if self.paused else "RESUMED"))
+
+    def action_reload_config(self):
+        sig_log = self.query_one("#signal-history", RichLog)
+        if self.reload_callback is None:
+            sig_log.write(Text("Reload unavailable: no config callback provided."))
+            return
+
+        try:
+            new_backtester, message = self.reload_callback()
+            if new_backtester is None:
+                sig_log.write(Text(f"Reload failed: {message}", style="red"))
+                return
+
+            self.backtester = new_backtester
+            self.paused = False
+            self.last_pos_count = 0
+            self.last_trade_count = 0
+            self.finished_logged = False
+            self._sync_backtester_refs()
+
+            table = self.query_one("#positions-table", DataTable)
+            table.clear()
+            sig_log.clear()
+            sig_log.write(Text(message or "Config reloaded and simulation restarted.", style="green"))
+        except Exception as e:
+            sig_log.write(Text(f"Reload failed: {e}", style="red"))
