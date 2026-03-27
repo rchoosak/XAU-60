@@ -3,6 +3,10 @@ version: "1.0.0"
 enabled: true
 description: "Mean reversion strategy for sideways markets using Bollinger Bands and RSI"
 
+# initial balance : >= $1500
+# timeframe: M15 only
+
+
 symbols:
   - XAUUSD
 
