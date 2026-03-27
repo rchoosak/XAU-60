@@ -492,9 +492,10 @@ string RatesToJson(MqlRates &rates[], const int count)
 
 ENUM_TIMEFRAMES ParseTimeframe(const string value)
 {
-   string normalized = StringUpper(Trim(value));
+   string normalized = Trim(value);
+   StringToUpper(normalized);
 
-#if defined(PERIOD_S1)
+#ifdef PERIOD_S1
    if(normalized == "S1" || normalized == "1S")
       return PERIOD_S1;
 #endif
