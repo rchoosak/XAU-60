@@ -71,7 +71,8 @@ class TradeExecutor:
     def execute_signal(
         self,
         signal: TradeSignal,
-        strategy_name: str = ""
+        strategy_name: str = "",
+        strategy_risk: Optional[Dict[str, Any]] = None,
     ) -> Optional[int]:
         """
         Execute a trade signal.
@@ -107,6 +108,20 @@ class TradeExecutor:
             return None
 
         # Calculate lot size: strategy YAML > .env DEFAULT_LOT_SIZE > risk-based
+        strategy_risk = strategy_risk or {}
+        strategy_max_risk = strategy_risk.get("max_risk_percent")
+        strategy_capital_base = strategy_risk.get("capital_base")
+        risk_percent = (
+            float(strategy_max_risk)
+            if strategy_max_risk is not None and str(strategy_max_risk) != ""
+            else None
+        )
+        capital_base = (
+            float(strategy_capital_base)
+            if strategy_capital_base is not None and str(strategy_capital_base) != ""
+            else None
+        )
+
         lot_size = signal.lot_size
         if lot_size <= 0:
             lot_size = self.default_lot_size  # Fallback to .env DEFAULT_LOT_SIZE
@@ -114,7 +129,12 @@ class TradeExecutor:
             sl_pips = self._calculate_sl_pips(
                 signal.symbol, signal.entry_price, signal.stop_loss
             )
-            lot_size = self.risk_manager.calculate_lot_size(signal.symbol, sl_pips)
+            lot_size = self.risk_manager.calculate_lot_size(
+                signal.symbol,
+                sl_pips,
+                risk_percent=risk_percent,
+                capital_base=capital_base,
+            )
 
         # Execute the trade
         magic = signal.magic_number if signal.magic_number > 0 else self.default_magic
@@ -166,6 +186,8 @@ class TradeExecutor:
                 "comment": signal.comment,
                 "reason": "Signal execution",
                 "open_time": record.open_time,
+                "risk_percent": risk_percent,
+                "capital_base": capital_base,
             })
             return ticket
 

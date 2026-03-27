@@ -88,6 +88,7 @@ class RiskConfig:
     max_drawdown: float = field(default_factory=lambda: get_env("MAX_DRAWDOWN", 20.0, float))
     max_positions: int = field(default_factory=lambda: get_env("MAX_POSITIONS", 5, int))
     max_positions_per_symbol: int = field(default_factory=lambda: get_env("MAX_POSITIONS_PER_SYMBOL", 2, int))
+    capital_base: float = field(default_factory=lambda: get_env("RISK_CAPITAL_BASE", 0.0, float))
 
 
 @dataclass
@@ -160,6 +161,7 @@ class Config:
                 "max_drawdown": self.risk.max_drawdown,
                 "max_positions": self.risk.max_positions,
                 "max_positions_per_symbol": self.risk.max_positions_per_symbol,
+                "capital_base": self.risk.capital_base,
             },
             "trading": {
                 "default_lot_size": self.trading.default_lot_size,

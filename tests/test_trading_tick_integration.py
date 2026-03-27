@@ -79,7 +79,7 @@ class StubExecutor:
     def __init__(self):
         self.calls = 0
 
-    def execute_signal(self, signal, strategy_name):
+    def execute_signal(self, signal, strategy_name, strategy_risk=None):
         self.calls += 1
         return 123
 

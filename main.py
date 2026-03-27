@@ -121,6 +121,7 @@ class TradingBot:
                 "max_drawdown": "MAX_DRAWDOWN",
                 "max_positions": "MAX_POSITIONS",
                 "max_positions_per_symbol": "MAX_POSITIONS_PER_SYMBOL",
+                "capital_base": "RISK_CAPITAL_BASE",
             },
             "trading": {
                 "default_lot_size": "DEFAULT_LOT_SIZE",
@@ -219,6 +220,7 @@ class TradingBot:
             max_drawdown=risk_config.get("max_drawdown", 20.0),
             max_positions=risk_config.get("max_positions", 5),
             max_positions_per_symbol=risk_config.get("max_positions_per_symbol", 2),
+            capital_base=risk_config.get("capital_base", 0.0),
         )
 
         self.risk_manager = RiskManager(self.mt5, risk_limits)
@@ -298,8 +300,11 @@ class TradingBot:
                     self._last_analyzed_bar[bar_key] = bar_time
 
                     if signal and signal.signal.value != 0:
+                        strategy_risk = {}
+                        if isinstance(getattr(strategy, "config", None), dict):
+                            strategy_risk = strategy.config.get("risk", {}) or {}
                         # Execute the signal
-                        ticket = self.trade_executor.execute_signal(signal, name)
+                        ticket = self.trade_executor.execute_signal(signal, name, strategy_risk)
                         if ticket:
                             opened_position = next(
                                 (p for p in self.mt5.get_positions() if p.ticket == ticket),

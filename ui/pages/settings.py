@@ -172,6 +172,15 @@ def render_risk_settings(settings: dict):
             help="Maximum positions per trading symbol"
         )
 
+        settings["risk"]["capital_base"] = st.number_input(
+            "Risk Capital Base ($)",
+            min_value=0.0,
+            value=_as_float(risk.get("capital_base", 0.0), 0.0),
+            step=1000.0,
+            format="%.2f",
+            help="0 = use full account balance; >0 limits risk calculations to this virtual capital."
+        )
+
     st.markdown("---")
 
     # Risk warnings

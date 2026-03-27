@@ -19,6 +19,7 @@ class RiskLimits:
     max_positions: int = 5
     max_positions_per_symbol: int = 2
     max_correlation_exposure: float = 50.0  # Percentage
+    capital_base: float = 0.0  # 0 = use full account
 
 
 @dataclass
@@ -58,6 +59,8 @@ class RiskManager:
         self._daily_stats: Optional[DailyStats] = None
         self._peak_balance: float = 0.0
         self._starting_balance: float = 0.0
+        self._balance_offset: float = 0.0
+        self._equity_offset: float = 0.0
 
     def initialize(self) -> bool:
         """
@@ -71,26 +74,38 @@ class RiskManager:
             logger.error("Failed to get account info for risk manager")
             return False
 
-        self._starting_balance = account.balance
-        self._peak_balance = account.balance
+        self._balance_offset = self._compute_offset(account.balance, self.limits.capital_base)
+        self._equity_offset = self._compute_offset(account.equity, self.limits.capital_base)
+
+        effective_balance = self._effective_balance(account)
+        effective_equity = self._effective_equity(account)
+
+        self._starting_balance = effective_balance
+        self._peak_balance = effective_equity
 
         self._daily_stats = DailyStats(
             date=date.today(),
-            starting_balance=account.balance,
+            starting_balance=effective_balance,
             current_pnl=0.0,
             trades_count=0,
             winning_trades=0,
             losing_trades=0,
         )
 
-        logger.info(f"Risk manager initialized. Balance: {account.balance} {account.currency}")
+        mode = (
+            f"effective_capital={effective_balance:.2f}"
+            if self.limits.capital_base and self.limits.capital_base > 0
+            else "effective_capital=full_balance"
+        )
+        logger.info(f"Risk manager initialized. Balance: {account.balance} {account.currency} | {mode}")
         return True
 
     def calculate_lot_size(
         self,
         symbol: str,
         stop_loss_pips: float,
-        risk_percent: Optional[float] = None
+        risk_percent: Optional[float] = None,
+        capital_base: Optional[float] = None,
     ) -> float:
         """
         Calculate position size based on risk percentage.
@@ -114,7 +129,8 @@ class RiskManager:
             return symbol_info.min_lot if symbol_info else 0.01
 
         # Calculate risk amount in account currency
-        risk_amount = account.balance * (risk_percent / 100)
+        effective_balance = self._effective_balance(account, capital_base_override=capital_base)
+        risk_amount = effective_balance * (risk_percent / 100)
 
         # Calculate pip value
         # For forex: pip_value = lot_size * contract_size * point
@@ -187,9 +203,10 @@ class RiskManager:
         # Reset stats if new day
         if self._daily_stats.date != date.today():
             account = self.mt5.get_account_info()
+            effective_balance = self._effective_balance(account) if account else 0.0
             self._daily_stats = DailyStats(
                 date=date.today(),
-                starting_balance=account.balance if account else 0,
+                starting_balance=effective_balance,
                 current_pnl=0.0,
                 trades_count=0,
                 winning_trades=0,
@@ -199,7 +216,8 @@ class RiskManager:
         # Calculate current daily P&L
         account = self.mt5.get_account_info()
         if account:
-            daily_pnl = account.equity - self._daily_stats.starting_balance
+            effective_equity = self._effective_equity(account)
+            daily_pnl = effective_equity - self._daily_stats.starting_balance
             if self._daily_stats.starting_balance <= 0:
                 logger.warning("Daily stats starting balance is non-positive; skipping daily loss limit check")
                 return False
@@ -217,13 +235,15 @@ class RiskManager:
         if not account:
             return False
 
+        effective_equity = self._effective_equity(account)
+
         # Update peak balance
-        if account.equity > self._peak_balance:
-            self._peak_balance = account.equity
+        if effective_equity > self._peak_balance:
+            self._peak_balance = effective_equity
 
         # Calculate drawdown
         if self._peak_balance > 0:
-            drawdown = ((self._peak_balance - account.equity) / self._peak_balance) * 100
+            drawdown = ((self._peak_balance - effective_equity) / self._peak_balance) * 100
 
             if drawdown >= self.limits.max_drawdown:
                 logger.warning(f"Max drawdown reached: {drawdown:.2f}%")
@@ -308,7 +328,8 @@ class RiskManager:
         if not account or self._peak_balance == 0:
             return 0.0
 
-        return ((self._peak_balance - account.equity) / self._peak_balance) * 100
+        effective_equity = self._effective_equity(account)
+        return ((self._peak_balance - effective_equity) / self._peak_balance) * 100
 
     def get_risk_status(self) -> Dict[str, Any]:
         """
@@ -319,10 +340,15 @@ class RiskManager:
         """
         account = self.mt5.get_account_info()
         positions = self.mt5.get_positions()
+        effective_balance = self._effective_balance(account) if account else 0
+        effective_equity = self._effective_equity(account) if account else 0
 
         return {
             "balance": account.balance if account else 0,
             "equity": account.equity if account else 0,
+            "effective_balance": effective_balance,
+            "effective_equity": effective_equity,
+            "capital_base": self.limits.capital_base,
             "margin_level": account.margin_level if account else 0,
             "drawdown_percent": self.get_current_drawdown(),
             "peak_balance": self._peak_balance,
@@ -333,3 +359,36 @@ class RiskManager:
             "daily_limit_reached": self._is_daily_limit_reached(),
             "max_drawdown_reached": self._is_max_drawdown_reached(),
         }
+
+    @staticmethod
+    def _compute_offset(current_value: float, capital_base: float) -> float:
+        """Compute offset used for effective-capital mode."""
+        if capital_base and capital_base > 0:
+            effective_start = min(current_value, capital_base)
+            return current_value - effective_start
+        return 0.0
+
+    def _effective_balance(
+        self,
+        account: Optional[AccountInfo],
+        capital_base_override: Optional[float] = None,
+    ) -> float:
+        """Return effective balance (virtual capital) for risk calculations."""
+        if not account:
+            return 0.0
+
+        if capital_base_override is not None and capital_base_override > 0:
+            override_offset = self._compute_offset(account.balance, capital_base_override)
+            return max(0.0, account.balance - override_offset)
+
+        if self.limits.capital_base and self.limits.capital_base > 0:
+            return max(0.0, account.balance - self._balance_offset)
+        return account.balance
+
+    def _effective_equity(self, account: Optional[AccountInfo]) -> float:
+        """Return effective equity (virtual capital) for risk calculations."""
+        if not account:
+            return 0.0
+        if self.limits.capital_base and self.limits.capital_base > 0:
+            return max(0.0, account.equity - self._equity_offset)
+        return account.equity

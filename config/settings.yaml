@@ -19,11 +19,12 @@ mt5:
 # ---------------
 # Can be overridden via environment variables
 risk:
-  max_risk_per_trade: 1.0       # Maximum risk per trade (%)
+  max_risk_per_trade: 0.5       # Maximum risk per trade (%)
   max_daily_loss: 5.0           # Maximum daily loss (%)
   max_drawdown: 20.0            # Maximum drawdown before stopping (%)
   max_positions: 5              # Maximum simultaneous positions
-  max_positions_per_symbol: 2   # Maximum positions per symbol
+  max_positions_per_symbol: 5   # Maximum positions per symbol
+  capital_base: 2000.0          # Virtual capital for risk calc (0 = use full account)
 
 # Trading Settings
 # ----------------

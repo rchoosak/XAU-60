@@ -7,12 +7,12 @@ description: "Smart Money Concepts scalping with CHoCH, FVG, and Order Blocks"
 symbols:
   - XAUUSD
 
-timeframe: S1
+timeframe: M1
 magic_number: 789123
 
 parameters:
   # CHoCH Detection
-  choch_lookback: 10        # 50
+  choch_lookback: 30        # 50
 
   # Fair Value Gap
   fvg_min_pips: 1.0         # 5.0
@@ -22,23 +22,24 @@ parameters:
   ob_lookback: 20           # 20
 
   # Trade Management
-  risk_reward: 2.0          # 2.0
+  risk_reward: 2.5          # Increase TP distance relative to SL
   trailing_stop: false
   trailing_pips: 20.0       # 20.0
 
   # Stop Loss
-  use_atr_sl: true
+  use_atr_sl: false         # ATR SL on M1 was too tight in live
   atr_period: 14
   atr_multiplier: 1.5
-  stop_loss_pips: 100.0  # Fallback if ATR not available
+  stop_loss_pips: 150.0     # 150 pips = 15.0 XAU price (point=0.01)
 
 risk:
-  max_risk_percent: 2.0
-  lot_size: 0
+  max_risk_percent: 0.5
+  lot_size: 0               # 0 = use global risk.lot_size from settings/.env. Force fixed lot to avoid 100.0 volume spikes
+  capital_base: 0.0         # 0 = use global risk.capital_base from settings/.env
 
 session:
   use_time_filter: false
-  timezone: "UTC"
+  timezone: "Asia/Bangkok"
   data_timezone: "UTC"
   start_hour: 12
   end_hour: 22
