@@ -1,5 +1,7 @@
 import argparse
+import glob
 import os
+import re
 import sys
 import yaml
 from datetime import datetime
@@ -31,7 +33,135 @@ def _parse_date(value):
         return None
     if isinstance(value, datetime):
         return value
-    return datetime.strptime(value, "%Y-%m-%d")
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        # Keep backward compatibility with date-only format while supporting
+        # second-level/tick backtests that commonly pass full timestamps.
+        if len(raw) == 10:
+            return datetime.strptime(raw, "%Y-%m-%d")
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+    raise ValueError(f"Unsupported date format: {value}")
+
+
+def _normalize_timeframe(raw_value):
+    if raw_value is None:
+        return None
+    tf = str(raw_value).strip().upper()
+    aliases = {
+        "TICK": "TICK",
+        "TICKS": "TICK",
+        "S1": "S1",
+        "1S": "S1",
+        "SEC1": "S1",
+        "SECOND": "S1",
+        "SECONDS": "S1",
+    }
+    return aliases.get(tf, tf)
+
+
+def _timeframe_tokens(timeframe):
+    tf = _normalize_timeframe(timeframe)
+    if tf == "TICK":
+        return ("tick",)
+    if tf == "S1":
+        return ("s1", "1s", "sec1", "second")
+    return ()
+
+
+def _has_timeframe_token(name_lower, token):
+    return re.search(rf"(?<![a-z0-9]){re.escape(token.lower())}(?![a-z0-9])", name_lower) is not None
+
+
+def _is_timeframe_file(path, timeframe, allow_s1_m1_fallback=False):
+    if not path:
+        return False
+    name = os.path.basename(path).lower()
+    tf = _normalize_timeframe(timeframe)
+    tokens = _timeframe_tokens(tf)
+    if tf == "S1":
+        if any(_has_timeframe_token(name, t) for t in tokens):
+            return True
+        return allow_s1_m1_fallback and _has_timeframe_token(name, "m1")
+    return any(_has_timeframe_token(name, t) for t in tokens)
+
+
+def _resolve_special_timeframe_data_path(args_dict):
+    timeframe = _normalize_timeframe(args_dict.get("timeframe"))
+    if timeframe not in {"TICK", "S1"}:
+        return
+
+    data_path = args_dict.get("data_path")
+    symbol = str(args_dict.get("symbol", "XAUUSD"))
+    symbol_lower = symbol.lower()
+
+    # If file path already matches requested timeframe, keep it as-is.
+    if data_path and os.path.isfile(data_path) and _is_timeframe_file(data_path, timeframe):
+        return
+
+    search_dir = None
+    fallback_file = None
+
+    if data_path:
+        if os.path.isfile(data_path):
+            search_dir = os.path.dirname(data_path) or "."
+            fallback_file = data_path
+        elif os.path.isdir(data_path):
+            search_dir = data_path
+        else:
+            parent = os.path.dirname(data_path)
+            if parent and os.path.isdir(parent):
+                search_dir = parent
+    else:
+        default_dir = "data/backtest-db"
+        if os.path.isdir(default_dir):
+            search_dir = default_dir
+
+    if not search_dir:
+        return
+
+    parquet_files = sorted(glob.glob(os.path.join(search_dir, "*.parquet")))
+    ranked_matches = []
+
+    for path in parquet_files:
+        name = os.path.basename(path).lower()
+        if symbol_lower not in name:
+            continue
+
+        if timeframe == "TICK":
+            if _has_timeframe_token(name, "tick"):
+                ranked_matches.append((0, path))
+        else:  # S1
+            if any(_has_timeframe_token(name, token) for token in _timeframe_tokens("S1")):
+                ranked_matches.append((0, path))
+            elif _has_timeframe_token(name, "m1"):
+                ranked_matches.append((1, path))
+
+    if ranked_matches:
+        ranked_matches.sort(key=lambda x: (x[0], x[1]))
+        chosen = ranked_matches[0][1]
+        args_dict["data_path"] = chosen
+        logger.info(f"Resolved {timeframe} data file: {chosen}")
+    elif fallback_file:
+        args_dict["data_path"] = fallback_file
+        logger.warning(
+            f"No data file matched timeframe={timeframe} in {search_dir}. "
+            f"Keeping provided file: {fallback_file}"
+        )
+    else:
+        logger.warning(
+            f"No data file matched timeframe={timeframe} in {search_dir}. "
+            "Set data_path explicitly to a parquet file."
+        )
 
 
 def _normalize_strategy_list(raw_value):
@@ -68,6 +198,8 @@ def _resolve_effective_args(args_dict):
 
     if resolved.get("strategies") is not None:
         resolved["strategies"] = _normalize_strategy_list(resolved.get("strategies"))
+    if resolved.get("timeframe") is not None:
+        resolved["timeframe"] = _normalize_timeframe(resolved.get("timeframe"))
 
     return resolved
 
@@ -99,7 +231,9 @@ def _build_executor(loader: StrategyLoader, args_dict):
 
 def _build_backtester(args_dict, loader):
     symbol = args_dict.get("symbol", "XAUUSD")
-    timeframe = args_dict.get("timeframe", "M15")
+    timeframe = _normalize_timeframe(args_dict.get("timeframe", "M15")) or "M15"
+    args_dict["timeframe"] = timeframe
+    _resolve_special_timeframe_data_path(args_dict)
     start = _parse_date(args_dict.get("start"))
     end = _parse_date(args_dict.get("end"))
     mode = args_dict.get("mode", "real") or "real"
@@ -213,9 +347,13 @@ def main():
     
     if args_dict.get("parallel"):
         if args_dict.get("timeframes"):
-            timeframes = [tf.strip() for tf in str(args_dict["timeframes"]).split(",") if tf.strip()]
+            timeframes = [
+                _normalize_timeframe(tf.strip())
+                for tf in str(args_dict["timeframes"]).split(",")
+                if tf.strip()
+            ]
         elif args_dict.get("timeframe"):
-            timeframes = [str(args_dict["timeframe"]).strip()]
+            timeframes = [_normalize_timeframe(str(args_dict["timeframe"]).strip())]
         else:
             timeframes = ["M5", "M15", "H1"]
 

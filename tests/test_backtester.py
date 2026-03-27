@@ -222,3 +222,24 @@ def test_backtester_uses_signal_entry_price_and_fixed_lot_size():
     opened = state["opened_positions"][0]
     assert opened["entry_price"] == 90.0
     assert opened["lot_size"] == 0.03
+
+
+def test_load_data_synthesizes_ohlc_from_bid_ask_tick_schema(tmp_path):
+    path = tmp_path / "xauusd-tick.parquet"
+    tick_df = pd.DataFrame(
+        [
+            {"time": datetime(2026, 1, 5, 8, 0, 0), "askPrice": 4422.165, "bidPrice": 4421.465},
+            {"time": datetime(2026, 1, 5, 8, 0, 1), "askPrice": 4422.200, "bidPrice": 4421.500},
+        ]
+    )
+    tick_df.to_parquet(path, index=False)
+
+    bt = Backtester({"data_path": str(path)})
+    loaded = bt.load_data("XAUUSD", "TICK")
+
+    for col in ("open", "high", "low", "close", "volume"):
+        assert col in loaded.columns
+
+    expected_mid = (4422.165 + 4421.465) / 2.0
+    assert abs(float(loaded.iloc[0]["close"]) - expected_mid) < 1e-9
+    assert float(loaded.iloc[0]["volume"]) == 1.0

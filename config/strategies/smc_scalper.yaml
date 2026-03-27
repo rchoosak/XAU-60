@@ -7,7 +7,7 @@ description: "Smart Money Concepts scalping with CHoCH, FVG, and Order Blocks"
 symbols:
   - XAUUSD
 
-timeframe: M5
+timeframe: M1
 magic_number: 789123
 
 parameters:
@@ -16,6 +16,7 @@ parameters:
 
   # Fair Value Gap
   fvg_min_pips: 5.0
+  fvg_lookback: 20
 
   # Order Block
   ob_lookback: 20
@@ -39,9 +40,9 @@ session:
   use_time_filter: true
   timezone: "UTC"
   data_timezone: "UTC"
-  start_hour: 8
+  start_hour: 12
   end_hour: 22
-  trade_friday: false
+  trade_friday: true
 
 alerts:
   telegram: true

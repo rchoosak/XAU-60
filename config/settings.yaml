@@ -19,7 +19,7 @@ mt5:
 # ---------------
 # Can be overridden via environment variables
 risk:
-  max_risk_per_trade: 2.0  # Maximum risk per trade (%)
+  max_risk_per_trade: 1.0  # Maximum risk per trade (%)
   max_daily_loss: 5.0  # Maximum daily loss (%)
   max_drawdown: 20.0  # Maximum drawdown before stopping (%)
   max_positions: 5  # Maximum simultaneous positions
@@ -28,9 +28,9 @@ risk:
 # Trading Settings
 # ----------------
 trading:
-  default_lot_size: 0.01
+  default_lot_size: 0
   default_magic_number: 123456
-  slippage: 10  # Maximum slippage in points
+  slippage: 30  # Maximum slippage in points
   check_interval: 1  # Seconds between tick checks
 
 # Alert Settings

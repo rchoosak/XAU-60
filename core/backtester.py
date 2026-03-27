@@ -74,6 +74,79 @@ class Backtester:
         self.point = 0.01
         self.spread = 0.0
 
+    def _normalize_data_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize known data column aliases into canonical OHLCV names."""
+        if df.empty:
+            return df
+
+        cols = {str(c).lower(): c for c in df.columns}
+        rename: Dict[str, str] = {}
+
+        def pick(*candidates: str) -> Optional[str]:
+            for candidate in candidates:
+                found = cols.get(candidate.lower())
+                if found is not None:
+                    return found
+            return None
+
+        if "time" not in cols:
+            tcol = pick("timestamp", "datetime", "date")
+            if tcol is not None:
+                rename[tcol] = "time"
+
+        canonical_aliases = {
+            "open": ("open", "openprice", "open_price"),
+            "high": ("high", "highprice", "high_price"),
+            "low": ("low", "lowprice", "low_price"),
+            "close": ("close", "closeprice", "close_price"),
+            "volume": ("volume", "tick_volume", "tickvolume", "volume_real", "volumereal"),
+            "ask": ("ask", "askprice", "ask_price"),
+            "bid": ("bid", "bidprice", "bid_price"),
+            "mid": ("mid", "midprice", "mid_price"),
+        }
+
+        for canonical, aliases in canonical_aliases.items():
+            if canonical in cols:
+                continue
+            found = pick(*aliases)
+            if found is not None:
+                rename[found] = canonical
+
+        if rename:
+            df = df.rename(columns=rename)
+
+        return df
+
+    def _ensure_ohlc_from_quotes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Synthesize OHLC columns for tick/quote datasets when missing."""
+        required = {"open", "high", "low", "close"}
+        if required.issubset(df.columns):
+            return df
+
+        base_price: Optional[pd.Series] = None
+        if "mid" in df.columns:
+            base_price = pd.to_numeric(df["mid"], errors="coerce")
+        elif "bid" in df.columns and "ask" in df.columns:
+            bid = pd.to_numeric(df["bid"], errors="coerce")
+            ask = pd.to_numeric(df["ask"], errors="coerce")
+            base_price = (bid + ask) / 2.0
+        elif "bid" in df.columns:
+            base_price = pd.to_numeric(df["bid"], errors="coerce")
+        elif "ask" in df.columns:
+            base_price = pd.to_numeric(df["ask"], errors="coerce")
+
+        if base_price is None:
+            return df
+
+        for col in ("open", "high", "low", "close"):
+            if col not in df.columns:
+                df[col] = base_price
+
+        if "volume" not in df.columns:
+            df["volume"] = 1.0
+
+        return df
+
     def load_data(self, symbol: str, timeframe: str, start: Optional[datetime] = None, end: Optional[datetime] = None) -> pd.DataFrame:
         """Load data from file or directory, with optional date filtering."""
         if os.path.isfile(self.data_dir):
@@ -85,6 +158,7 @@ class Backtester:
             raise FileNotFoundError(f"Data file not found: {path}")
         
         df = pd.read_parquet(path)
+        df = self._normalize_data_columns(df)
         if "time" not in df.columns:
             # Fallback for older formats if any
             if "timestamp" in df.columns:
@@ -93,9 +167,17 @@ class Backtester:
                 raise ValueError("Data file must contain a 'time' or 'timestamp' column")
 
         df["time"] = pd.to_datetime(df["time"])
+        df = self._ensure_ohlc_from_quotes(df)
+
+        missing = [c for c in ("open", "high", "low", "close") if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Data file missing required OHLC columns: {missing}. "
+                f"Available columns: {list(df.columns)}"
+            )
         
         # Ensure OHLC are numeric
-        for col in ["open", "high", "low", "close", "volume"]:
+        for col in ["open", "high", "low", "close", "volume", "bid", "ask", "mid"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
                 

@@ -34,6 +34,7 @@ class SMCScalper(StrategyBase):
         # Default parameters
         self.choch_lookback = 50
         self.fvg_min_pips = 5.0
+        self.fvg_lookback = 20
         self.ob_lookback = 20
         self.risk_reward = 2.0
         self.use_trailing_stop = True
@@ -61,6 +62,7 @@ class SMCScalper(StrategyBase):
         params = config.get("parameters", {})
         self.choch_lookback = params.get("choch_lookback", 50)
         self.fvg_min_pips = params.get("fvg_min_pips", 5.0)
+        self.fvg_lookback = int(params.get("fvg_lookback", 20))
         self.ob_lookback = params.get("ob_lookback", 20)
         self.risk_reward = params.get("risk_reward", 2.0)
         self.use_trailing_stop = params.get("trailing_stop", True)
@@ -129,7 +131,7 @@ class SMCScalper(StrategyBase):
             return None
 
         # Detect Bullish FVG
-        fvg = self.smc.detect_bullish_fvg(data, 20)
+        fvg = self.smc.detect_bullish_fvg(data, self.fvg_lookback)
         if not fvg:
             return None
 
@@ -177,7 +179,7 @@ class SMCScalper(StrategyBase):
             return None
 
         # Detect Bearish FVG
-        fvg = self.smc.detect_bearish_fvg(data, 20)
+        fvg = self.smc.detect_bearish_fvg(data, self.fvg_lookback)
         if not fvg:
             return None
 
@@ -224,8 +226,6 @@ class SMCScalper(StrategyBase):
         is_buy: bool
     ) -> float:
         """Calculate stop loss based on ATR or fixed pips."""
-        point = self._point_for_symbol(symbol)
-
         if self.use_atr_sl and len(data) >= self.atr_period:
             atr = calculate_atr(data, self.atr_period)
             atr_value = atr.iloc[-1] * self.atr_multiplier

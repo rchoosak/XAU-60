@@ -14,6 +14,7 @@ def _base_config():
         "parameters": {
             "choch_lookback": 50,
             "fvg_min_pips": 5.0,
+            "fvg_lookback": 20,
             "ob_lookback": 20,
             "risk_reward": 2.0,
             "trailing_stop": False,
@@ -86,3 +87,73 @@ def test_smc_scalper_session_time_uses_timezone_conversion():
         ]
     )
     assert strategy._is_trading_time(data) is True
+
+
+class _DummyFVG:
+    def __init__(self):
+        self.lower_price = 1999.0
+        self.upper_price = 2001.0
+        self.mid_price = 2000.0
+
+
+class _DummyOrderBlock:
+    def __init__(self):
+        self.lower_price = 2010.0
+        self.upper_price = 1990.0
+
+
+class _CaptureLookbackSMC:
+    def __init__(self):
+        self.bullish_fvg_lookback = None
+        self.bearish_fvg_lookback = None
+
+    def detect_bullish_choch(self, data, lookback):
+        return (len(data) - 1, float(data.iloc[-1]["high"]))
+
+    def detect_bearish_choch(self, data, lookback):
+        return (len(data) - 1, float(data.iloc[-1]["low"]))
+
+    def detect_bullish_fvg(self, data, lookback):
+        self.bullish_fvg_lookback = lookback
+        return _DummyFVG()
+
+    def detect_bearish_fvg(self, data, lookback):
+        self.bearish_fvg_lookback = lookback
+        return _DummyFVG()
+
+    def detect_bearish_order_block(self, data, lookback):
+        return _DummyOrderBlock()
+
+    def detect_bullish_order_block(self, data, lookback):
+        return _DummyOrderBlock()
+
+
+def test_smc_scalper_uses_configured_fvg_lookback_for_bullish_and_bearish_paths():
+    strategy = SMCScalper()
+    cfg = _base_config()
+    cfg["parameters"]["fvg_lookback"] = 33
+    strategy.initialize(cfg)
+
+    strategy.smc = _CaptureLookbackSMC()
+
+    rows = []
+    for i in range(60):
+        rows.append(
+            {
+                "time": datetime(2026, 1, 1, 0, 0) + pd.Timedelta(minutes=i * 5),
+                "open": 2000.0,
+                "high": 2000.5,
+                "low": 1999.5,
+                "close": 2000.0,
+                "volume": 1,
+            }
+        )
+    data = pd.DataFrame(rows)
+
+    bullish_signal = strategy._check_bullish_setup("XAUUSD", data)
+    assert bullish_signal is not None
+    assert strategy.smc.bullish_fvg_lookback == 33
+
+    bearish_signal = strategy._check_bearish_setup("XAUUSD", data)
+    assert bearish_signal is not None
+    assert strategy.smc.bearish_fvg_lookback == 33
