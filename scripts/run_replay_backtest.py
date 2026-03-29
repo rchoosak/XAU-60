@@ -822,11 +822,18 @@ class ReplayRiskManager(RiskManager):
             effective_equity = self._effective_equity(account)
             daily_pnl = effective_equity - self._daily_stats.starting_balance
             if self._daily_stats.starting_balance <= 0:
-                logger.warning("Daily stats starting balance is non-positive; skipping daily loss limit check")
+                self._warn_throttled(
+                    "daily_non_positive_start",
+                    "Daily stats starting balance is non-positive; skipping daily loss limit check",
+                )
                 return False
             daily_pnl_percent = (daily_pnl / self._daily_stats.starting_balance) * 100
             if daily_pnl_percent <= -self.limits.max_daily_loss:
-                logger.warning(f"Daily loss limit reached: {daily_pnl_percent:.2f}%")
+                self._warn_throttled(
+                    "daily_loss_limit",
+                    f"Daily loss limit reached: {daily_pnl_percent:.2f}%",
+                    cooldown_seconds=30.0,
+                )
                 return True
         return False
 
