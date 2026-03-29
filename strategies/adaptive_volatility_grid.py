@@ -5,7 +5,7 @@ Mean-reversion grid entries with ATR-adaptive spacing, trend filter, and
 optional two-stage trailing stop.
 """
 from datetime import date
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -79,6 +79,12 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.session_timezone = "UTC"
         self.data_timezone = "UTC"
 
+        # Optional execution filters (config-driven)
+        self.allow_long = True
+        self.allow_short = True
+        self.blocked_hours: Set[int] = set()
+        self.blocked_weekdays: Set[int] = set()
+
         # Runtime state
         self.magic_number = 789777
         self._bar_counter: Dict[str, int] = {}
@@ -132,6 +138,18 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.session_timezone = session.get("timezone", "UTC")
         self.data_timezone = session.get("data_timezone", "UTC")
 
+        exec_filters = config.get("execution_filters", {})
+        if bool(exec_filters.get("enabled", False)):
+            self.allow_long = bool(exec_filters.get("allow_long", True))
+            self.allow_short = bool(exec_filters.get("allow_short", True))
+            self.blocked_hours = self._parse_blocked_hours(exec_filters.get("blocked_hours", []))
+            self.blocked_weekdays = self._parse_blocked_weekdays(exec_filters.get("blocked_weekdays", []))
+        else:
+            self.allow_long = True
+            self.allow_short = True
+            self.blocked_hours = set()
+            self.blocked_weekdays = set()
+
         self.symbols = config.get("symbols", ["XAUUSD"])
         self.timeframe = config.get("timeframe", "M1")
         self.enabled = config.get("enabled", True)
@@ -156,6 +174,9 @@ class AdaptiveVolatilityGrid(StrategyBase):
 
         is_open, session_time = self._is_trading_time(data)
         if not is_open:
+            return None
+
+        if self._is_blocked_window(session_time):
             return None
 
         self._reset_daily_counter(symbol, session_time.date())
@@ -187,6 +208,11 @@ class AdaptiveVolatilityGrid(StrategyBase):
         elif current_price >= anchor + spacing and rsi >= self.rsi_overbought:
             signal = Signal.SELL
         else:
+            return None
+
+        if signal == Signal.BUY and not self.allow_long:
+            return None
+        if signal == Signal.SELL and not self.allow_short:
             return None
 
         if not self._passes_reentry_filter(symbol, signal, current_price, spacing):
@@ -343,3 +369,86 @@ class AdaptiveVolatilityGrid(StrategyBase):
         if last_day != current_day:
             self._daily_signal_date[symbol] = current_day
             self._daily_signal_count[symbol] = 0
+
+    def _is_blocked_window(self, session_time: pd.Timestamp) -> bool:
+        if self.blocked_hours and session_time.hour in self.blocked_hours:
+            return True
+        if self.blocked_weekdays and session_time.weekday() in self.blocked_weekdays:
+            return True
+        return False
+
+    def _parse_blocked_hours(self, raw) -> Set[int]:
+        out: Set[int] = set()
+        if raw is None:
+            return out
+        values = raw if isinstance(raw, list) else [raw]
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            if "-" in text:
+                parts = [p.strip() for p in text.split("-", 1)]
+                if len(parts) != 2:
+                    continue
+                try:
+                    start = int(parts[0])
+                    end = int(parts[1])
+                except ValueError:
+                    continue
+                if 0 <= start <= 23 and 0 <= end <= 23:
+                    if start <= end:
+                        out.update(range(start, end + 1))
+                    else:
+                        out.update(range(start, 24))
+                        out.update(range(0, end + 1))
+                continue
+            try:
+                hour = int(text)
+            except ValueError:
+                continue
+            if 0 <= hour <= 23:
+                out.add(hour)
+        return out
+
+    def _parse_blocked_weekdays(self, raw) -> Set[int]:
+        mapping = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tues": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thur": 3,
+            "thurs": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+        out: Set[int] = set()
+        if raw is None:
+            return out
+        values = raw if isinstance(raw, list) else [raw]
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip().lower()
+            if not text:
+                continue
+            if text in mapping:
+                out.add(mapping[text])
+                continue
+            try:
+                day = int(text)
+            except ValueError:
+                continue
+            if 0 <= day <= 6:
+                out.add(day)
+        return out

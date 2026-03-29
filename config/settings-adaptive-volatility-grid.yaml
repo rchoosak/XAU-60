@@ -1,0 +1,60 @@
+# Global Trading Bot Settings
+# ============================
+# IMPORTANT: Sensitive values (passwords, tokens) should be set via
+# environment variables in .env file. See .env.example for reference.
+#
+# Environment variables take precedence over values in this file.
+
+# MetaTrader 5 Connection
+# -----------------------
+# Set these via environment variables:
+# - MT5_LOGIN
+# - MT5_PASSWORD
+# - MT5_SERVER
+# - MT5_PATH (optional)
+mt5:
+  timeout: 30000  # Connection timeout in ms
+
+# Risk Management
+# ---------------
+# Can be overridden via environment variables
+risk:
+  max_risk_per_trade: 0.5       # Maximum risk per trade (%)
+  max_daily_loss: 5.0           # Maximum daily loss (%)
+  max_drawdown: 20.0            # Maximum drawdown before stopping (%)
+  max_positions: 5              # Maximum simultaneous positions
+  max_positions_per_symbol: 2   # Maximum positions per symbol
+  # capital_base: 10000.0          # Virtual capital for risk calc (0 = use full account)
+
+# Trading Settings
+# ----------------
+trading:
+  default_lot_size: 0
+  default_magic_number: 123456
+  slippage: 10                  # Maximum slippage in points
+  check_interval: 1             # Seconds between tick checks
+
+# Alert Settings
+# --------------
+# Set tokens/URLs via environment variables:
+# - TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+# - DISCORD_ENABLED, DISCORD_WEBHOOK_URL
+alerts:
+  telegram:
+    enabled: false
+  discord:
+    enabled: false
+
+# Logging
+# -------
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  file: logs/trading_bot.log
+  rotation: "10 MB"
+  retention: "7 days"
+
+# UI Settings
+# -----------
+ui:
+  refresh_rate: 5  # Dashboard refresh rate in seconds
+  theme: light  # light or dark

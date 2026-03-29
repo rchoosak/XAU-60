@@ -1,6 +1,6 @@
 name: "Adaptive Volatility Grid"
 version: "1.0.0"
-enabled: false
+enabled: true
 description: "ATR-adaptive mean-reversion grid with ADX trend filter"
 
 symbols:
@@ -45,11 +45,18 @@ risk:
 
 session:
   use_time_filter: true
-  timezone: "UTC"
+  timezone: "Asia/Bangkok"
   data_timezone: "UTC"
   start_hour: 6
   end_hour: 20
   trade_friday: true
+
+execution_filters:
+  enabled: true
+  allow_long: true
+  allow_short: false
+  blocked_hours: [6, 12, 13, 16, 17, 19]
+  blocked_weekdays: [tue, thu]
 
 alerts:
   telegram: true
