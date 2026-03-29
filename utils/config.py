@@ -182,13 +182,18 @@ class Config:
         }
 
 
-def load_config() -> Config:
+def load_config(reload_env: bool = False) -> Config:
     """
     Load configuration from environment variables.
+
+    Args:
+        reload_env: When True, re-read .env file with override.
 
     Returns:
         Config object with all settings
     """
+    if reload_env and env_path.exists():
+        load_dotenv(env_path, override=True)
     return Config()
 
 

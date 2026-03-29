@@ -11,7 +11,7 @@ import os
 import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any, Dict, List, Tuple
 from copy import deepcopy
 import yaml
 from loguru import logger
@@ -23,8 +23,10 @@ from core.mt5_connector import MT5Connector
 from core.strategy_loader import StrategyLoader
 from core.risk_manager import RiskManager, RiskLimits
 from core.trade_executor import TradeExecutor
+from core.strategy_base import Signal, TradeSignal
 from utils.logger import setup_logger
-from utils.config import config as env_config, load_config
+from utils.config import load_config
+from utils.trade_journal import append_trade_event
 
 
 class TradingBot:
@@ -55,6 +57,10 @@ class TradingBot:
         self.risk_manager: Optional[RiskManager] = None
         self.trade_executor: Optional[TradeExecutor] = None
         self._last_analyzed_bar = {}
+        self._processed_trade_history_count = 0
+        self._loss_streak: Dict[str, int] = {}
+        self._loss_streak_day: Dict[str, str] = {}
+        self._cooldown_bars_left: Dict[str, int] = {}
 
         self._setup_signal_handlers()
 
@@ -74,8 +80,8 @@ class TradingBot:
         Environment variables take precedence over YAML settings.
         """
         try:
-            # Start with environment config
-            self.config = env_config.to_dict()
+            # Start with fresh environment config (reload .env each call)
+            self.config = load_config(reload_env=True).to_dict()
 
             # Load YAML config as fallback for non-sensitive settings
             if self.config_path.exists():
@@ -281,9 +287,12 @@ class TradingBot:
     def _tick(self):
         """Process one tick cycle."""
         strategies = self.strategy_loader.get_enabled_strategies()
+        self._sync_trade_outcomes(strategies)
 
         for name, strategy in strategies.items():
             for symbol in strategy.symbols:
+                bar_processed = False
+                state_key = self._strategy_symbol_key(name, symbol)
                 try:
                     # Get market data
                     data = self.mt5.get_ohlcv(symbol, strategy.timeframe, 100)
@@ -295,32 +304,467 @@ class TradingBot:
                     if self._last_analyzed_bar.get(bar_key) == bar_time:
                         continue
 
-                    # Analyze for signals
-                    signal = strategy.analyze(symbol, data)
                     self._last_analyzed_bar[bar_key] = bar_time
+                    bar_processed = True
+                    self._reset_loss_streak_if_new_day(state_key, bar_time)
 
-                    if signal and signal.signal.value != 0:
-                        strategy_risk = {}
-                        if isinstance(getattr(strategy, "config", None), dict):
-                            strategy_risk = strategy.config.get("risk", {}) or {}
-                        # Execute the signal
-                        ticket = self.trade_executor.execute_signal(signal, name, strategy_risk)
-                        if ticket:
-                            opened_position = next(
-                                (p for p in self.mt5.get_positions() if p.ticket == ticket),
-                                None
-                            )
-                            if opened_position is not None:
-                                strategy.on_trade_opened(opened_position)
+                    # Analyze for signals
+                    signal_obj = strategy.analyze(symbol, data)
+                    decision_context = self._build_decision_context(
+                        strategy_name=name,
+                        strategy=strategy,
+                        symbol=symbol,
+                        data=data,
+                        signal=signal_obj,
+                    )
+
+                    if not signal_obj or signal_obj.signal.value == 0:
+                        self._log_decision_event(
+                            strategy_name=name,
+                            strategy=strategy,
+                            symbol=symbol,
+                            decision="no_signal",
+                            reason="strategy_returned_hold_or_none",
+                            signal=signal_obj,
+                            context=decision_context,
+                        )
+                        continue
+
+                    allowed, reason = self._passes_execution_filters(
+                        strategy_name=name,
+                        strategy=strategy,
+                        symbol=symbol,
+                        signal=signal_obj,
+                        bar_time=bar_time,
+                        decision_context=decision_context,
+                    )
+
+                    if not allowed:
+                        decision_context["filter_reason"] = reason
+                        self._log_decision_event(
+                            strategy_name=name,
+                            strategy=strategy,
+                            symbol=symbol,
+                            decision="blocked",
+                            reason=reason,
+                            signal=signal_obj,
+                            context=decision_context,
+                        )
+                        continue
+
+                    self._log_decision_event(
+                        strategy_name=name,
+                        strategy=strategy,
+                        symbol=symbol,
+                        decision="passed",
+                        reason="all_filters_passed",
+                        signal=signal_obj,
+                        context=decision_context,
+                    )
+
+                    strategy_risk = {}
+                    if isinstance(getattr(strategy, "config", None), dict):
+                        strategy_risk = strategy.config.get("risk", {}) or {}
+
+                    try:
+                        ticket = self.trade_executor.execute_signal(
+                            signal_obj,
+                            name,
+                            strategy_risk,
+                            decision_context=decision_context,
+                        )
+                    except TypeError as exc:
+                        # Keep compatibility with lightweight test stubs that do not
+                        # support the decision_context keyword yet.
+                        if "decision_context" not in str(exc):
+                            raise
+                        ticket = self.trade_executor.execute_signal(
+                            signal_obj,
+                            name,
+                            strategy_risk,
+                        )
+                    if ticket:
+                        opened_position = next(
+                            (p for p in self.mt5.get_positions() if p.ticket == ticket),
+                            None
+                        )
+                        if opened_position is not None:
+                            strategy.on_trade_opened(opened_position)
+                    else:
+                        self._log_decision_event(
+                            strategy_name=name,
+                            strategy=strategy,
+                            symbol=symbol,
+                            decision="executor_rejected",
+                            reason="trade_executor_rejected_signal",
+                            signal=signal_obj,
+                            context=decision_context,
+                        )
 
                 except Exception as e:
                     logger.error(f"Error processing {symbol} with {name}: {e}")
+                finally:
+                    if bar_processed:
+                        self._advance_cooldown_bar(state_key)
 
         # Manage open positions
         try:
             self.trade_executor.manage_positions(strategies)
         except Exception as e:
             logger.error(f"Error managing positions: {e}")
+
+        self._sync_trade_outcomes(strategies)
+
+    def _runtime_mode(self) -> str:
+        backend = str(getattr(self.mt5, "backend_mode", "")).strip().lower()
+        if backend in {"replay", "backtest"}:
+            return "backtest"
+        return "live"
+
+    @staticmethod
+    def _strategy_symbol_key(strategy_name: str, symbol: str) -> str:
+        return f"{strategy_name}::{symbol}"
+
+    @staticmethod
+    def _normalize_keys(raw: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k).replace("-", "_"): v for k, v in raw.items()}
+
+    @staticmethod
+    def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized: Dict[str, Any] = {}
+        if not isinstance(context, dict):
+            return sanitized
+        for key, value in context.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                sanitized[str(key)] = value
+        return sanitized
+
+    @staticmethod
+    def _as_float(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_datetime(value: Any) -> Optional[datetime]:
+        if isinstance(value, datetime):
+            return value
+        if hasattr(value, "to_pydatetime"):
+            try:
+                return value.to_pydatetime()
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _normalize_weekday(raw: Any) -> Optional[int]:
+        if isinstance(raw, bool) or raw is None:
+            return None
+        if isinstance(raw, (int, float)):
+            day = int(raw)
+            return day if 0 <= day <= 6 else None
+        if isinstance(raw, str):
+            text = raw.strip().lower()
+            if text.isdigit():
+                day = int(text)
+                return day if 0 <= day <= 6 else None
+            names = {
+                "mon": 0, "monday": 0,
+                "tue": 1, "tuesday": 1,
+                "wed": 2, "wednesday": 2,
+                "thu": 3, "thursday": 3,
+                "fri": 4, "friday": 4,
+                "sat": 5, "saturday": 5,
+                "sun": 6, "sunday": 6,
+            }
+            return names.get(text)
+        return None
+
+    @staticmethod
+    def _hour_blocked(hour: int, blocked_hours: Any) -> bool:
+        if not isinstance(blocked_hours, list):
+            return False
+
+        for item in blocked_hours:
+            if isinstance(item, (int, float)) and not isinstance(item, bool):
+                if hour == int(item):
+                    return True
+                continue
+
+            if isinstance(item, str):
+                text = item.strip()
+                if not text:
+                    continue
+                if "-" in text:
+                    left, right = text.split("-", 1)
+                    try:
+                        start = int(left.strip())
+                        end = int(right.strip())
+                    except ValueError:
+                        continue
+                    if 0 <= start <= 23 and 0 <= end <= 23 and start <= end and start <= hour <= end:
+                        return True
+                    continue
+                if text.isdigit() and hour == int(text):
+                    return True
+
+            if isinstance(item, dict):
+                start = TradingBot._as_float(item.get("start"))
+                end = TradingBot._as_float(item.get("end"))
+                if start is None or end is None:
+                    continue
+                i_start = int(start)
+                i_end = int(end)
+                if 0 <= i_start <= 23 and 0 <= i_end <= 23 and i_start <= hour <= i_end:
+                    return True
+        return False
+
+    def _decision_logging_config(self, strategy: Any) -> Dict[str, Any]:
+        cfg = {}
+        if isinstance(getattr(strategy, "config", None), dict):
+            cfg = self._normalize_keys(strategy.config.get("decision_logging", {}) or {})
+        return {
+            "enabled": bool(cfg.get("enabled", True)),
+            "log_passed": bool(cfg.get("log_passed", True)),
+            "log_blocked": bool(cfg.get("log_blocked", True)),
+            "log_no_signal": bool(cfg.get("log_no_signal", False)),
+            "log_executor_rejected": bool(cfg.get("log_executor_rejected", True)),
+        }
+
+    def _should_log_decision(self, strategy: Any, decision: str) -> bool:
+        cfg = self._decision_logging_config(strategy)
+        if not cfg["enabled"]:
+            return False
+        if decision == "no_signal":
+            return cfg["log_no_signal"]
+        if decision == "blocked":
+            return cfg["log_blocked"]
+        if decision == "passed":
+            return cfg["log_passed"]
+        if decision == "executor_rejected":
+            return cfg["log_executor_rejected"]
+        return True
+
+    def _execution_filters_config(self, strategy: Any) -> Dict[str, Any]:
+        raw = {}
+        if isinstance(getattr(strategy, "config", None), dict):
+            raw = self._normalize_keys(strategy.config.get("execution_filters", {}) or {})
+        return {
+            "enabled": bool(raw.get("enabled", False)),
+            "allow_long": bool(raw.get("allow_long", True)),
+            "allow_short": bool(raw.get("allow_short", True)),
+            "blocked_hours": raw.get("blocked_hours", []) or [],
+            "blocked_weekdays": raw.get("blocked_weekdays", []) or [],
+            "max_spread_points": float(raw.get("max_spread_points", 0.0) or 0.0),
+            "cooldown_bars_after_loss": max(0, int(raw.get("cooldown_bars_after_loss", 0) or 0)),
+            "max_consecutive_losses": max(0, int(raw.get("max_consecutive_losses", 0) or 0)),
+        }
+
+    def _build_decision_context(
+        self,
+        strategy_name: str,
+        strategy: Any,
+        symbol: str,
+        data: Any,
+        signal: Optional[TradeSignal],
+    ) -> Dict[str, Any]:
+        bar = data.iloc[-1]
+        bar_time_raw = bar.get("time")
+        bar_time = self._extract_datetime(bar_time_raw)
+
+        get_tick = getattr(self.mt5, "get_tick", None)
+        tick = get_tick(symbol) if callable(get_tick) else {}
+        tick = tick or {}
+
+        get_symbol_info = getattr(self.mt5, "get_symbol_info", None)
+        symbol_info = get_symbol_info(symbol) if callable(get_symbol_info) else None
+        point = float(getattr(symbol_info, "point", 0.0) or 0.0)
+
+        bid = self._as_float(tick.get("bid"))
+        ask = self._as_float(tick.get("ask"))
+        spread_points = None
+        if bid is not None and ask is not None and point > 0:
+            spread_points = (ask - bid) / point
+
+        get_positions = getattr(self.mt5, "get_positions", None)
+        positions = get_positions() if callable(get_positions) else []
+        positions = positions or []
+        symbol_positions = [p for p in positions if p.symbol == symbol]
+
+        signal_side = "HOLD"
+        if signal and hasattr(signal, "signal"):
+            signal_side = getattr(signal.signal, "name", str(signal.signal))
+
+        strategy_risk = {}
+        if isinstance(getattr(strategy, "config", None), dict):
+            strategy_risk = strategy.config.get("risk", {}) or {}
+
+        key = self._strategy_symbol_key(strategy_name, symbol)
+        ctx = {
+            "strategy": strategy_name,
+            "symbol": symbol,
+            "timeframe": getattr(strategy, "timeframe", ""),
+            "bar_time": bar_time.isoformat() if bar_time else str(bar_time_raw),
+            "bar_open": self._as_float(bar.get("open")),
+            "bar_high": self._as_float(bar.get("high")),
+            "bar_low": self._as_float(bar.get("low")),
+            "bar_close": self._as_float(bar.get("close")),
+            "bar_volume": self._as_float(bar.get("volume")),
+            "bid": bid,
+            "ask": ask,
+            "spread_points": round(spread_points, 2) if spread_points is not None else None,
+            "signal_side": signal_side,
+            "signal_entry_price": self._as_float(getattr(signal, "entry_price", None)) if signal else None,
+            "signal_stop_loss": self._as_float(getattr(signal, "stop_loss", None)) if signal else None,
+            "signal_take_profit": self._as_float(getattr(signal, "take_profit", None)) if signal else None,
+            "signal_lot_size": self._as_float(getattr(signal, "lot_size", None)) if signal else None,
+            "signal_comment": str(getattr(signal, "comment", "")) if signal else "",
+            "open_positions_total": len(positions),
+            "open_positions_symbol": len(symbol_positions),
+            "loss_streak": self._loss_streak.get(key, 0),
+            "cooldown_bars_left": self._cooldown_bars_left.get(key, 0),
+            "risk_percent_cfg": self._as_float(strategy_risk.get("max_risk_percent")),
+            "capital_base_cfg": self._as_float(strategy_risk.get("capital_base")),
+        }
+        return self._sanitize_context(ctx)
+
+    def _log_decision_event(
+        self,
+        strategy_name: str,
+        strategy: Any,
+        symbol: str,
+        decision: str,
+        reason: str,
+        signal: Optional[TradeSignal],
+        context: Dict[str, Any],
+    ) -> None:
+        if not self._should_log_decision(strategy, decision):
+            return
+
+        signal_side = "HOLD"
+        if signal and hasattr(signal, "signal"):
+            signal_side = getattr(signal.signal, "name", str(signal.signal))
+
+        append_trade_event({
+            "mode": self._runtime_mode(),
+            "event": "DECISION",
+            "strategy": strategy_name,
+            "symbol": symbol,
+            "timeframe": getattr(strategy, "timeframe", ""),
+            "signal": signal_side,
+            "decision": decision,
+            "reason": reason,
+            "entry_price": self._as_float(getattr(signal, "entry_price", None)) if signal else None,
+            "stop_loss": self._as_float(getattr(signal, "stop_loss", None)) if signal else None,
+            "take_profit": self._as_float(getattr(signal, "take_profit", None)) if signal else None,
+            "lot_size": self._as_float(getattr(signal, "lot_size", None)) if signal else None,
+            "context": self._sanitize_context(context),
+        })
+
+    def _passes_execution_filters(
+        self,
+        strategy_name: str,
+        strategy: Any,
+        symbol: str,
+        signal: TradeSignal,
+        bar_time: Any,
+        decision_context: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        filters = self._execution_filters_config(strategy)
+        if not filters["enabled"]:
+            return True, "filters_disabled"
+
+        if signal.signal == Signal.BUY and not filters["allow_long"]:
+            return False, "long_entries_disabled"
+        if signal.signal == Signal.SELL and not filters["allow_short"]:
+            return False, "short_entries_disabled"
+
+        bar_dt = self._extract_datetime(bar_time)
+        if bar_dt:
+            blocked_weekdays = set()
+            for raw_day in filters["blocked_weekdays"]:
+                day = self._normalize_weekday(raw_day)
+                if day is not None:
+                    blocked_weekdays.add(day)
+            if blocked_weekdays and bar_dt.weekday() in blocked_weekdays:
+                return False, f"blocked_weekday_{bar_dt.weekday()}"
+
+            if self._hour_blocked(bar_dt.hour, filters["blocked_hours"]):
+                return False, f"blocked_hour_{bar_dt.hour}"
+
+        max_spread_points = filters["max_spread_points"]
+        spread_points = self._as_float(decision_context.get("spread_points"))
+        if max_spread_points > 0 and spread_points is not None and spread_points > max_spread_points:
+            return False, f"spread_too_wide_{spread_points:.2f}_gt_{max_spread_points:.2f}"
+
+        key = self._strategy_symbol_key(strategy_name, symbol)
+        cooldown_left = self._cooldown_bars_left.get(key, 0)
+        if cooldown_left > 0:
+            return False, f"cooldown_after_loss_{cooldown_left}_bars_left"
+
+        max_consecutive_losses = filters["max_consecutive_losses"]
+        streak = self._loss_streak.get(key, 0)
+        if max_consecutive_losses > 0 and streak >= max_consecutive_losses:
+            return False, f"max_consecutive_losses_reached_{streak}"
+
+        return True, "passed"
+
+    def _reset_loss_streak_if_new_day(self, key: str, ref_time: Any) -> None:
+        dt = self._extract_datetime(ref_time)
+        if not dt:
+            return
+        today_key = dt.date().isoformat()
+        last_day = self._loss_streak_day.get(key)
+        if last_day is None:
+            self._loss_streak_day[key] = today_key
+            return
+        if last_day != today_key:
+            self._loss_streak_day[key] = today_key
+            self._loss_streak[key] = 0
+            self._cooldown_bars_left[key] = 0
+
+    def _advance_cooldown_bar(self, key: str) -> None:
+        current = self._cooldown_bars_left.get(key, 0)
+        if current > 0:
+            self._cooldown_bars_left[key] = current - 1
+
+    def _sync_trade_outcomes(self, strategies: Dict[str, Any]) -> None:
+        get_trade_history = getattr(self.trade_executor, "get_trade_history", None)
+        if not callable(get_trade_history):
+            return
+
+        history = get_trade_history()
+        if not isinstance(history, list):
+            return
+        if self._processed_trade_history_count >= len(history):
+            return
+
+        for record in history[self._processed_trade_history_count:]:
+            key = self._strategy_symbol_key(record.strategy or "unknown", record.symbol)
+            close_time = record.close_time or datetime.now()
+            self._reset_loss_streak_if_new_day(key, close_time)
+
+            profit = self._as_float(record.profit) or 0.0
+            if profit < 0:
+                self._loss_streak[key] = self._loss_streak.get(key, 0) + 1
+                self._loss_streak_day[key] = close_time.date().isoformat()
+
+                strategy = strategies.get(record.strategy or "")
+                filters = self._execution_filters_config(strategy) if strategy else {}
+                cooldown = int(filters.get("cooldown_bars_after_loss", 0) or 0)
+                if cooldown > 0:
+                    self._cooldown_bars_left[key] = max(self._cooldown_bars_left.get(key, 0), cooldown)
+            elif profit > 0:
+                self._loss_streak[key] = 0
+                self._loss_streak_day[key] = close_time.date().isoformat()
+                self._cooldown_bars_left[key] = 0
+
+        self._processed_trade_history_count = len(history)
 
     def _export_state(self):
         """Export live state to JSON for Dashboard."""

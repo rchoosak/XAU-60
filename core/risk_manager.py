@@ -4,6 +4,7 @@ Risk Manager for position sizing and risk control.
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from datetime import datetime, date
+import time
 from loguru import logger
 
 from .mt5_connector import MT5Connector, AccountInfo, SymbolInfo
@@ -61,6 +62,8 @@ class RiskManager:
         self._starting_balance: float = 0.0
         self._balance_offset: float = 0.0
         self._equity_offset: float = 0.0
+        self._warning_last_ts: Dict[str, float] = {}
+        self._warning_last_msg: Dict[str, str] = {}
 
     def initialize(self) -> bool:
         """
@@ -219,12 +222,19 @@ class RiskManager:
             effective_equity = self._effective_equity(account)
             daily_pnl = effective_equity - self._daily_stats.starting_balance
             if self._daily_stats.starting_balance <= 0:
-                logger.warning("Daily stats starting balance is non-positive; skipping daily loss limit check")
+                self._warn_throttled(
+                    "daily_non_positive_start",
+                    "Daily stats starting balance is non-positive; skipping daily loss limit check",
+                )
                 return False
             daily_pnl_percent = (daily_pnl / self._daily_stats.starting_balance) * 100
 
             if daily_pnl_percent <= -self.limits.max_daily_loss:
-                logger.warning(f"Daily loss limit reached: {daily_pnl_percent:.2f}%")
+                self._warn_throttled(
+                    "daily_loss_limit",
+                    f"Daily loss limit reached: {daily_pnl_percent:.2f}%",
+                    cooldown_seconds=30.0,
+                )
                 return True
 
         return False
@@ -246,7 +256,11 @@ class RiskManager:
             drawdown = ((self._peak_balance - effective_equity) / self._peak_balance) * 100
 
             if drawdown >= self.limits.max_drawdown:
-                logger.warning(f"Max drawdown reached: {drawdown:.2f}%")
+                self._warn_throttled(
+                    "max_drawdown_limit",
+                    f"Max drawdown reached: {drawdown:.2f}%",
+                    cooldown_seconds=30.0,
+                )
                 return True
 
         return False
@@ -392,3 +406,16 @@ class RiskManager:
         if self.limits.capital_base and self.limits.capital_base > 0:
             return max(0.0, account.equity - self._equity_offset)
         return account.equity
+
+    def _warn_throttled(self, key: str, message: str, cooldown_seconds: float = 20.0) -> None:
+        """
+        Log warning with debounce to prevent spam in tight loops.
+        Always logs when message changes; otherwise throttled by cooldown.
+        """
+        now = time.time()
+        last_ts = self._warning_last_ts.get(key, 0.0)
+        last_msg = self._warning_last_msg.get(key)
+        if last_msg != message or (now - last_ts) >= cooldown_seconds:
+            logger.warning(message)
+            self._warning_last_ts[key] = now
+            self._warning_last_msg[key] = message

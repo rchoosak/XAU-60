@@ -2,8 +2,9 @@
 Trade Executor for order management.
 """
 from typing import Optional, Dict, Any, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+import time
 from loguru import logger
 
 from .mt5_connector import MT5Connector
@@ -29,6 +30,7 @@ class TradeRecord:
     close_price: Optional[float] = None
     profit: Optional[float] = None
     status: str = "OPEN"
+    context: Dict[str, Any] = field(default_factory=dict)
 
 
 class TradeExecutor:
@@ -67,12 +69,15 @@ class TradeExecutor:
 
         self._trade_history: List[TradeRecord] = []
         self._active_trades: Dict[int, TradeRecord] = {}
+        self._warning_last_ts: Dict[str, float] = {}
+        self._warning_last_msg: Dict[str, str] = {}
 
     def execute_signal(
         self,
         signal: TradeSignal,
         strategy_name: str = "",
         strategy_risk: Optional[Dict[str, Any]] = None,
+        decision_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[int]:
         """
         Execute a trade signal.
@@ -92,7 +97,7 @@ class TradeExecutor:
             signal.symbol, signal.signal
         )
         if not can_trade:
-            logger.warning(f"Cannot open trade: {reason}")
+            self._warn_throttled("cannot_open_trade", f"Cannot open trade: {reason}", cooldown_seconds=15.0)
             return None
 
         # Validate the signal
@@ -104,7 +109,7 @@ class TradeExecutor:
             signal.take_profit,
         )
         if not is_valid:
-            logger.warning(f"Invalid trade signal: {reason}")
+            self._warn_throttled("invalid_trade_signal", f"Invalid trade signal: {reason}", cooldown_seconds=15.0)
             return None
 
         # Calculate lot size: strategy YAML > .env DEFAULT_LOT_SIZE > risk-based
@@ -152,6 +157,8 @@ class TradeExecutor:
         )
 
         if success:
+            context = self._sanitize_context(decision_context)
+            open_time = self._current_market_time(signal.symbol)
             # Record the trade
             record = TradeRecord(
                 ticket=ticket,
@@ -163,7 +170,8 @@ class TradeExecutor:
                 lot_size=lot_size,
                 strategy=strategy_name,
                 magic_number=magic,
-                open_time=datetime.now(),
+                open_time=open_time,
+                context=context,
             )
             self._active_trades[ticket] = record
 
@@ -172,7 +180,7 @@ class TradeExecutor:
                 f"@ {signal.entry_price} | SL: {signal.stop_loss} | TP: {signal.take_profit}"
             )
             append_trade_event({
-                "mode": "live",
+                "mode": self._journal_mode(),
                 "event": "OPEN",
                 "ticket": ticket,
                 "symbol": signal.symbol,
@@ -188,6 +196,7 @@ class TradeExecutor:
                 "open_time": record.open_time,
                 "risk_percent": risk_percent,
                 "capital_base": capital_base,
+                "context": context,
             })
             return ticket
 
@@ -213,13 +222,14 @@ class TradeExecutor:
             return False
 
         # Close the position
+        close_time = self._current_market_time(position.symbol)
         success = self.mt5.close_position(ticket)
 
         if success:
             # Update trade record
             if ticket in self._active_trades:
                 record = self._active_trades.pop(ticket)
-                record.close_time = datetime.now()
+                record.close_time = close_time
                 tick = self.mt5.get_tick(position.symbol)
                 if tick:
                     if position.type == Signal.BUY:
@@ -235,7 +245,7 @@ class TradeExecutor:
                 # Record for risk manager
                 self.risk_manager.record_trade_result(position.profit)
                 append_trade_event({
-                    "mode": "live",
+                    "mode": self._journal_mode(),
                     "event": "CLOSE",
                     "ticket": ticket,
                     "symbol": record.symbol,
@@ -250,6 +260,12 @@ class TradeExecutor:
                     "reason": reason,
                     "open_time": record.open_time,
                     "close_time": record.close_time,
+                    "duration_minutes": (
+                        (record.close_time - record.open_time).total_seconds() / 60.0
+                        if record.close_time and record.open_time
+                        else None
+                    ),
+                    "entry_context": record.context,
                 })
 
             logger.info(f"Trade closed: {ticket} | Reason: {reason} | P&L: {position.profit}")
@@ -418,3 +434,60 @@ class TradeExecutor:
             "profit_factor": gross_profit / gross_loss if gross_loss > 0 else 0,
             "active_trades": len(self._active_trades),
         }
+
+    @staticmethod
+    def _sanitize_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Keep only JSON-serializable scalar fields for journaling."""
+        if not isinstance(context, dict):
+            return {}
+        sanitized: Dict[str, Any] = {}
+        for key, value in context.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                sanitized[str(key)] = value
+        return sanitized
+
+    def _journal_mode(self) -> str:
+        backend = str(getattr(self.mt5, "backend_mode", "")).strip().lower()
+        if backend in {"replay", "backtest"}:
+            return "backtest"
+        return "live"
+
+    def _current_market_time(self, symbol: str = "") -> datetime:
+        # 1) Prefer tick timestamp when available.
+        if symbol:
+            try:
+                tick = self.mt5.get_tick(symbol)
+            except Exception:
+                tick = None
+            tick_time = tick.get("time") if isinstance(tick, dict) else None
+            dt = self._coerce_datetime(tick_time)
+            if dt is not None:
+                return dt
+
+        # 2) Replay connector exposes current_time directly.
+        dt = self._coerce_datetime(getattr(self.mt5, "current_time", None))
+        if dt is not None:
+            return dt
+
+        # 3) Fallback to wall clock.
+        return datetime.now()
+
+    @staticmethod
+    def _coerce_datetime(value: Any) -> Optional[datetime]:
+        if isinstance(value, datetime):
+            return value
+        if hasattr(value, "to_pydatetime"):
+            try:
+                return value.to_pydatetime()
+            except Exception:
+                return None
+        return None
+
+    def _warn_throttled(self, key: str, message: str, cooldown_seconds: float = 10.0) -> None:
+        now = time.time()
+        last_ts = self._warning_last_ts.get(key, 0.0)
+        last_msg = self._warning_last_msg.get(key)
+        if last_msg != message or (now - last_ts) >= cooldown_seconds:
+            logger.warning(message)
+            self._warning_last_ts[key] = now
+            self._warning_last_msg[key] = message
