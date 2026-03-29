@@ -80,63 +80,24 @@ python3 scripts/csv_to_parquet.py \
 
 ---
 
-## 5. การใช้ `run_backtest.py` และการ Config
+## 5. Backtest (Live-like จำลองเหมือนบอทเทรดจริง)
 
-### การรันคำสั่ง
-รันการทดสอบโดยระบุไฟล์ตั้งค่า (YAML):
+สำหรับกรณีที่ต้องการให้การคำนวณใช้ flow เดียวกับบอทจริง (โหลด `.env` + `settings.yaml` + strategy config และใช้ `RiskManager`/`TradeExecutor` ตัวเดียวกับโหมด live) ให้ใช้สคริปต์ใหม่:
 
 ```bash
 python3 scripts/run_backtest.py -f config/backtest.yaml
 ```
 
-### การตั้งค่าใน `config/backtest.yaml`
-คุณสามารถตั้งค่าตัวแปรต่างๆ ได้ในไฟล์ YAML โดยมีส่วนที่สำคัญคือ:
-
-```yaml
-# 1. ข้อมูล (Data Parameters)
-mode: real                                       # ต้องเป็น 'real' สำหรับข้อมูลดิบ
-symbol: XAUUSD
-timeframe: M5
-data_path: data/backtest-db/your_file.parquet    # ชี้ตรงที่ไฟล์ parquet ได้เลย
-
-# ช่วงเวลา (หากไม่ระบุ จะ Test ข้อมูลทั้งหมดที่มีในไฟล์)
-# start: "2024-01-01"
-# end: "2026-03-25"
-
-# 2. การเทรด (Trading Parameters)
-initial_balance: 10000.0
-risk_per_trade: 0.01                             # เสี่ยง 1% ของพอร์ตต่อออเดอร์
-max_open_trades: 3
-
-# 3. กลยุทธ์ (Execution)
-execution: bot                                   # [strategy | bot]
-strategies: "bollinger_reversion,smc_scalper"     # ชื่อกลยุทธ์ (คั่นด้วย comma)
-```
-
-**ข้อแนะนำ:**
-- หากต้องการเทรดข้อมูลทั้งหมดในไฟล์ ให้ **comment** หรือลบบรรทัด `start` และ `end` ออก
-- หากระบุ `start`/`end` ระบบจะกรองข้อมูล (Scope) ตามช่วงเวลาที่กำหนดเท่านั้น
-
----
-
-## 6. Live-like Backtest (จำลองเหมือนบอทเทรดจริง)
-
-สำหรับกรณีที่ต้องการให้การคำนวณใช้ flow เดียวกับบอทจริง (โหลด `.env` + `settings.yaml` + strategy config และใช้ `RiskManager`/`TradeExecutor` ตัวเดียวกับโหมด live) ให้ใช้สคริปต์ใหม่:
-
-```bash
-python3 scripts/run_replay_backtest.py -f config/replay_backtest.yaml
-```
-
 หรือรันแบบไม่เปิด TUI:
 
 ```bash
-python3 scripts/run_replay_backtest.py -f config/replay_backtest.yaml --no-tui
+python3 scripts/run_backtest.py -f config/backtest.yaml --no-tui
 ```
 
 ไฟล์ตั้งค่าตัวอย่างอยู่ที่:
 
 ```text
-config/replay_backtest.yaml
+config/backtest.yaml
 ```
 
 จุดสำคัญ:

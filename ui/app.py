@@ -45,7 +45,7 @@ def main():
     # Navigation
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Strategies", "Backtest", "Settings"],
+        ["Dashboard", "Strategies", "Settings"],
         index=0
     )
 
@@ -82,9 +82,6 @@ def main():
     elif page == "Strategies":
         from pages.strategies import render_strategies
         render_strategies()
-    elif page == "Backtest":
-        from pages.backtest import render_backtest
-        render_backtest()
     elif page == "Settings":
         from pages.settings import render_settings
         render_settings()

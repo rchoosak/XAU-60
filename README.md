@@ -7,7 +7,7 @@ A modular, high-performance trading bot for MetaTrader 5 with a Streamlit web in
 - **Modular Strategy System** - Add new strategies by creating a Python file + YAML config
 - **Multi-Symbol Support** - Trade XAUUSD, EURUSD, GBPUSD, and more simultaneously
 - **Smart Money Concepts** - Built-in CHoCH, FVG, Order Block detection
-- **Backtesting Engine** - Test strategies on historical data with detailed metrics
+- **Replay Backtesting** - Test strategies on historical data using live bot execution flow
 - **Risk Management** - Position sizing, daily loss limits, max drawdown protection
 - **Real-time Alerts** - Telegram and Discord notifications
 - **Web UI** - Streamlit dashboard for monitoring and configuration
@@ -22,6 +22,7 @@ A modular, high-performance trading bot for MetaTrader 5 with a Streamlit web in
 ├── LICENSE                    # MIT License
 ├── config/
 │   ├── settings.yaml          # Global settings (non-sensitive)
+│   ├── backtest.yaml          # Backtest config (live-like)
 │   └── strategies/            # Strategy configurations
 │       ├── smc_scalper.yaml
 │       ├── trend_break_trauma.yaml
@@ -32,7 +33,7 @@ A modular, high-performance trading bot for MetaTrader 5 with a Streamlit web in
 │   ├── strategy_loader.py     # Dynamic strategy discovery
 │   ├── risk_manager.py        # Risk calculations
 │   ├── trade_executor.py      # Order execution
-│   └── backtest_engine.py     # Backtesting
+│   └── tui_app.py             # Terminal UI runtime
 ├── strategies/
 │   ├── smc_scalper.py         # SMC Scalper strategy
 │   ├── trend_break_trauma.py  # Trend Break + RSI strategy
@@ -49,8 +50,10 @@ A modular, high-performance trading bot for MetaTrader 5 with a Streamlit web in
 │   └── pages/                 # UI pages
 │       ├── dashboard.py       # Live trading view
 │       ├── strategies.py      # Strategy management
-│       ├── backtest.py        # Backtesting interface
 │       └── settings.py        # Configuration
+├── scripts/
+│   ├── run_backtest.py        # Backtest runner (live-like)
+│   └── analyze_loss_windows.py# Loss-window analyzer
 └── utils/
     ├── config.py              # Environment config loader
     ├── logger.py              # Logging setup
@@ -329,38 +332,16 @@ logging:
 
 ## Backtesting
 
-Run backtests via the Web UI:
+Run backtests from terminal:
 
-1. Launch UI: `streamlit run ui/app.py`
-2. Go to "Backtest" page
-3. Select strategy, symbol, date range
-4. Click "Run Backtest"
+```bash
+python3 scripts/run_backtest.py -f config/backtest.yaml
+```
 
-Or programmatically:
+Disable TUI:
 
-```python
-from core.mt5_connector import MT5Connector
-from core.backtest_engine import BacktestEngine
-from strategies.smc_scalper import SMCScalper
-from datetime import datetime, timedelta
-
-mt5 = MT5Connector()
-mt5.connect()
-
-engine = BacktestEngine(mt5)
-strategy = SMCScalper()
-strategy.initialize({"symbols": ["XAUUSD"], "timeframe": "M15", "enabled": True})
-
-result = engine.run_backtest(
-    strategy=strategy,
-    symbol="XAUUSD",
-    timeframe="M15",
-    start_date=datetime.now() - timedelta(days=90),
-    end_date=datetime.now(),
-    initial_balance=10000
-)
-
-print(engine.generate_report(result))
+```bash
+python3 scripts/run_backtest.py -f config/backtest.yaml --no-tui
 ```
 
 ## Alerts Setup

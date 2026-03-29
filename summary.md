@@ -18,7 +18,7 @@ XAU-60 Trading Bot
 │   ├── strategy_loader.py    # Load strategies from config
 │   ├── trade_executor.py     # Order execution & position management
 │   ├── bridge_server.py      # HTTP bridge (MT5 ↔ Python)
-│   └── backtest_engine.py    # Historical testing
+│   └── tui_app.py            # Terminal UI for runtime/replay
 ├── Strategies (strategies/)
 │   ├── crt_tbs.py            # CRT-TBS Strategy
 │   ├── smc_scalper.py        # SMC Scalper Strategy
@@ -35,7 +35,9 @@ XAU-60 Trading Bot
 │   └── pages/                # Dashboard pages
 │       ├── dashboard.py      # Main dashboard
 │       ├── strategies.py     # Strategy management
-│       └── backtest.py       # Backtesting interface
+│       └── settings.py       # Runtime settings
+├── scripts/
+│   └── run_backtest.py       # Backtest runner (live-like)
 ├── Utils (utils/)
 │   ├── config.py             # Configuration loader
 │   ├── logger.py             # Logging utility
@@ -84,9 +86,9 @@ XAU-60 Trading Bot
   - `GET /account_info` - Account information
   - `POST /close_position` - Close position
 
-#### `backtest_engine.py`
-- Backtesting engine สำหรับ historical testing
-- รองรับ multiple strategies
+#### `tui_app.py`
+- Terminal UI สำหรับโหมดรันและ backtest แบบ live-like
+- รองรับการควบคุม pause/resume/quit ระหว่างทดสอบ
 
 ---
 
@@ -161,7 +163,7 @@ DiscordBot(webhook_url)
 - **Main Pages**:
   - `Dashboard`: Live trades, P/L, account info
   - `Strategies`: Manage strategy activation
-  - `Backtest`: Run historical tests
+  - `Settings`: Configure runtime and risk-related values
 
 #### Components
 - Charts with Plotly integration
@@ -248,7 +250,7 @@ streamlit run ui/app.py
 | Feature | Status |
 |---------|--------|
 | Live Trading | ✅ |
-| Backtesting | ✅ |
+| Backtesting (Live-like) | ✅ |
 | Multiple Strategies | ✅ (3 strategies) |
 | Alert Notifications | ✅ (Telegram, Discord) |
 | Dashboard UI | ✅ (Streamlit) |
@@ -263,7 +265,7 @@ streamlit run ui/app.py
 2. **Auto-Detect Mode**: Automatic detection of MT5 connection method
 3. **HTTP Bridge**: Secure communication between Python and MT5 Terminal
 4. **Multiple Timeframes**: Support for various timeframe analysis
-5. **Backtesting Framework**: Historical performance testing
+5. **Backtesting Flow (Live-like)**: ทดสอบด้วย execution path เดียวกับบอทจริง
 
 ---
 
