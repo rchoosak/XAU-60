@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, Dict, List, Tuple
 from copy import deepcopy
+import math
 
 
 def _is_truthy(value: str) -> bool:
@@ -50,6 +51,32 @@ from core.strategy_base import Signal, TradeSignal
 from utils.logger import setup_logger
 from utils.config import load_config
 from utils.trade_journal import append_trade_event
+
+
+TREND_BIAS_DEFAULT_TIMEFRAME_LADDER = [
+    "M1",
+    "M5",
+    "M15",
+    "M30",
+    "H1",
+    "H2",
+    "H4",
+    "D1",
+    "W1",
+]
+
+TREND_BIAS_TIMEFRAME_ALIASES = {
+    "1M": "M1",
+    "5M": "M5",
+    "15M": "M15",
+    "30M": "M30",
+    "60M": "H1",
+    "120M": "H2",
+    "240M": "H4",
+    "1H": "H1",
+    "2H": "H2",
+    "4H": "H4",
+}
 
 
 class TradingBot:
@@ -167,6 +194,18 @@ class TradingBot:
             "ui": {
                 "refresh_rate": "UI_REFRESH_RATE",
                 "theme": "UI_THEME",
+            },
+            "trend_bias_filter": {
+                "enabled": "TREND_BIAS_FILTER_ENABLED",
+                "timeframes_count": "TREND_BIAS_TF_COUNT",
+                "timeframe_ladder": "TREND_BIAS_TF_LADDER",
+                "lookback_bars": "TREND_BIAS_LOOKBACK_BARS",
+                "ema_fast_period": "TREND_BIAS_EMA_FAST",
+                "ema_slow_period": "TREND_BIAS_EMA_SLOW",
+                "slope_lookback": "TREND_BIAS_SLOPE_LOOKBACK",
+                "min_slope_pips": "TREND_BIAS_MIN_SLOPE_PIPS",
+                "up_score_threshold": "TREND_BIAS_UP_SCORE_THRESHOLD",
+                "down_score_threshold": "TREND_BIAS_DOWN_SCORE_THRESHOLD",
             },
         }
 
@@ -555,6 +594,215 @@ class TradingBot:
                     return True
         return False
 
+    @staticmethod
+    def _normalize_timeframe_value(raw: Any) -> str:
+        text = str(raw or "").strip().upper()
+        if not text:
+            return "M1"
+        if text.endswith("MIN"):
+            text = text[:-3] + "M"
+        return TREND_BIAS_TIMEFRAME_ALIASES.get(text, text)
+
+    @staticmethod
+    def _normalize_timeframe_ladder(raw: Any) -> List[str]:
+        values: List[str] = []
+        if isinstance(raw, str):
+            values = [item.strip() for item in raw.split(",") if item.strip()]
+        elif isinstance(raw, list):
+            values = [str(item).strip() for item in raw if str(item).strip()]
+
+        normalized: List[str] = []
+        seen = set()
+        for value in values:
+            tf = TradingBot._normalize_timeframe_value(value)
+            if tf and tf not in seen:
+                normalized.append(tf)
+                seen.add(tf)
+        return normalized
+
+    def _trend_bias_global_config(self) -> Dict[str, Any]:
+        raw = self._normalize_keys(self.config.get("trend_bias_filter", {}) or {})
+        ladder = self._normalize_timeframe_ladder(raw.get("timeframe_ladder", []))
+        if not ladder:
+            ladder = list(TREND_BIAS_DEFAULT_TIMEFRAME_LADDER)
+
+        return {
+            "enabled": bool(raw.get("enabled", False)),
+            "timeframes_count": max(1, int(raw.get("timeframes_count", 4) or 4)),
+            "timeframe_ladder": ladder,
+            "lookback_bars": max(60, int(raw.get("lookback_bars", 250) or 250)),
+            "ema_fast_period": max(2, int(raw.get("ema_fast_period", 50) or 50)),
+            "ema_slow_period": max(3, int(raw.get("ema_slow_period", 200) or 200)),
+            "slope_lookback": max(1, int(raw.get("slope_lookback", 5) or 5)),
+            "min_slope_pips": float(raw.get("min_slope_pips", 0.0) or 0.0),
+            "up_score_threshold": float(raw.get("up_score_threshold", 0.5) or 0.5),
+            "down_score_threshold": float(raw.get("down_score_threshold", 0.5) or 0.5),
+        }
+
+    def _trend_bias_filter_config(self, strategy: Any) -> Dict[str, Any]:
+        cfg = self._trend_bias_global_config()
+        raw = {}
+        if isinstance(getattr(strategy, "config", None), dict):
+            raw = self._normalize_keys(strategy.config.get("trend_bias_filter", {}) or {})
+
+        if "enabled" in raw:
+            cfg["enabled"] = bool(raw.get("enabled"))
+        if "timeframes_count" in raw:
+            cfg["timeframes_count"] = max(1, int(raw.get("timeframes_count", cfg["timeframes_count"]) or cfg["timeframes_count"]))
+        if "lookback_bars" in raw:
+            cfg["lookback_bars"] = max(60, int(raw.get("lookback_bars", cfg["lookback_bars"]) or cfg["lookback_bars"]))
+        if "ema_fast_period" in raw:
+            cfg["ema_fast_period"] = max(2, int(raw.get("ema_fast_period", cfg["ema_fast_period"]) or cfg["ema_fast_period"]))
+        if "ema_slow_period" in raw:
+            cfg["ema_slow_period"] = max(3, int(raw.get("ema_slow_period", cfg["ema_slow_period"]) or cfg["ema_slow_period"]))
+        if "slope_lookback" in raw:
+            cfg["slope_lookback"] = max(1, int(raw.get("slope_lookback", cfg["slope_lookback"]) or cfg["slope_lookback"]))
+        if "min_slope_pips" in raw:
+            cfg["min_slope_pips"] = float(raw.get("min_slope_pips", cfg["min_slope_pips"]) or cfg["min_slope_pips"])
+        if "up_score_threshold" in raw:
+            cfg["up_score_threshold"] = float(raw.get("up_score_threshold", cfg["up_score_threshold"]) or cfg["up_score_threshold"])
+        if "down_score_threshold" in raw:
+            cfg["down_score_threshold"] = float(raw.get("down_score_threshold", cfg["down_score_threshold"]) or cfg["down_score_threshold"])
+        if "timeframe_ladder" in raw:
+            override_ladder = self._normalize_timeframe_ladder(raw.get("timeframe_ladder"))
+            if override_ladder:
+                cfg["timeframe_ladder"] = override_ladder
+
+        if cfg["ema_fast_period"] >= cfg["ema_slow_period"]:
+            cfg["ema_fast_period"] = max(2, cfg["ema_slow_period"] // 2)
+        return cfg
+
+    def _pips_to_price(self, symbol: str, pips: float) -> float:
+        get_symbol_info = getattr(self.mt5, "get_symbol_info", None)
+        symbol_info = get_symbol_info(symbol) if callable(get_symbol_info) else None
+        point = float(getattr(symbol_info, "point", 0.0) or 0.0)
+        if point <= 0:
+            return 0.0
+        return float(pips) * point * 10.0
+
+    def _bias_timeframes_from_strategy_tf(self, strategy_tf: Any, cfg: Dict[str, Any]) -> List[str]:
+        ladder = list(cfg.get("timeframe_ladder", TREND_BIAS_DEFAULT_TIMEFRAME_LADDER))
+        if not ladder:
+            ladder = list(TREND_BIAS_DEFAULT_TIMEFRAME_LADDER)
+
+        base_tf = self._normalize_timeframe_value(strategy_tf)
+        if base_tf not in ladder:
+            ladder = [base_tf] + [tf for tf in ladder if tf != base_tf]
+
+        start_idx = ladder.index(base_tf)
+        count = max(1, int(cfg.get("timeframes_count", 4)))
+        selected = ladder[start_idx:start_idx + count]
+        if not selected:
+            selected = [base_tf]
+        return selected
+
+    def _evaluate_timeframe_trend(
+        self,
+        symbol: str,
+        timeframe: str,
+        cfg: Dict[str, Any],
+    ) -> Tuple[int, Dict[str, Any]]:
+        # +1 => uptrend, -1 => downtrend, 0 => neutral/insufficient.
+        required = max(
+            int(cfg["ema_slow_period"]) + int(cfg["slope_lookback"]) + 2,
+            20,
+        )
+        count = max(required, int(cfg["lookback_bars"]))
+        data = self.mt5.get_ohlcv(symbol, timeframe, count)
+        if data is None or len(data) < required:
+            return 0, {
+                "timeframe": timeframe,
+                "state": "insufficient_data",
+                "bars": 0 if data is None else len(data),
+                "required": required,
+            }
+
+        close = data["close"].astype(float)
+        ema_fast = close.ewm(span=int(cfg["ema_fast_period"]), adjust=False).mean()
+        ema_slow = close.ewm(span=int(cfg["ema_slow_period"]), adjust=False).mean()
+
+        slope_lookback = min(int(cfg["slope_lookback"]), len(close) - 2)
+        ema_slow_now = float(ema_slow.iloc[-1])
+        ema_slow_prev = float(ema_slow.iloc[-1 - slope_lookback])
+        slope = ema_slow_now - ema_slow_prev
+
+        close_now = float(close.iloc[-1])
+        ema_fast_now = float(ema_fast.iloc[-1])
+        min_slope_price = self._pips_to_price(symbol, float(cfg["min_slope_pips"]))
+
+        if close_now > ema_slow_now and ema_fast_now > ema_slow_now and slope >= min_slope_price:
+            return 1, {
+                "timeframe": timeframe,
+                "state": "up",
+                "close": close_now,
+                "ema_fast": ema_fast_now,
+                "ema_slow": ema_slow_now,
+                "slope": slope,
+            }
+
+        if close_now < ema_slow_now and ema_fast_now < ema_slow_now and slope <= -min_slope_price:
+            return -1, {
+                "timeframe": timeframe,
+                "state": "down",
+                "close": close_now,
+                "ema_fast": ema_fast_now,
+                "ema_slow": ema_slow_now,
+                "slope": slope,
+            }
+
+        return 0, {
+            "timeframe": timeframe,
+            "state": "neutral",
+            "close": close_now,
+            "ema_fast": ema_fast_now,
+            "ema_slow": ema_slow_now,
+            "slope": slope,
+        }
+
+    def _passes_trend_bias_filter(
+        self,
+        strategy: Any,
+        symbol: str,
+        signal: TradeSignal,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        cfg = self._trend_bias_filter_config(strategy)
+        if not cfg["enabled"]:
+            return True, "trend_bias_filter_disabled", {"enabled": False}
+
+        tfs = self._bias_timeframes_from_strategy_tf(getattr(strategy, "timeframe", "M1"), cfg)
+        signs: List[int] = []
+        details: List[Dict[str, Any]] = []
+        for timeframe in tfs:
+            sign, detail = self._evaluate_timeframe_trend(symbol, timeframe, cfg)
+            signs.append(sign)
+            details.append(detail)
+
+        active = [s for s in signs if s != 0]
+        score = (sum(signs) / len(signs)) if signs else 0.0
+        up_threshold = float(cfg["up_score_threshold"])
+        down_threshold = float(cfg["down_score_threshold"])
+
+        bias = "neutral"
+        if score >= up_threshold:
+            bias = "up"
+        elif score <= -down_threshold:
+            bias = "down"
+
+        context = {
+            "enabled": True,
+            "timeframes": tfs,
+            "score": round(score, 4),
+            "bias": bias,
+            "active_tf": len(active),
+            "details": details,
+        }
+
+        if signal.signal == Signal.SELL and bias == "up":
+            return False, f"mtf_bias_up_blocks_sell_score_{score:.3f}", context
+        if signal.signal == Signal.BUY and bias == "down":
+            return False, f"mtf_bias_down_blocks_buy_score_{score:.3f}", context
+        return True, "mtf_bias_passed", context
+
     def _decision_logging_config(self, strategy: Any) -> Dict[str, Any]:
         cfg = {}
         if isinstance(getattr(strategy, "config", None), dict):
@@ -707,6 +955,21 @@ class TradingBot:
         decision_context: Dict[str, Any],
     ) -> Tuple[bool, str]:
         filters = self._execution_filters_config(strategy)
+        trend_ok, trend_reason, trend_context = self._passes_trend_bias_filter(
+            strategy=strategy,
+            symbol=symbol,
+            signal=signal,
+        )
+        decision_context["trend_bias_filter"] = self._sanitize_context({
+            "enabled": trend_context.get("enabled"),
+            "score": trend_context.get("score"),
+            "bias": trend_context.get("bias"),
+            "active_tf": trend_context.get("active_tf"),
+            "timeframes": ",".join(trend_context.get("timeframes", [])),
+        })
+        if not trend_ok:
+            return False, trend_reason
+
         if not filters["enabled"]:
             return True, "filters_disabled"
 

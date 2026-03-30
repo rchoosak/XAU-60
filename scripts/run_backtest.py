@@ -67,6 +67,7 @@ TIMEFRAME_SECONDS = {
     "M15": 15 * 60,
     "M30": 30 * 60,
     "H1": 60 * 60,
+    "H2": 2 * 60 * 60,
     "H4": 4 * 60 * 60,
     "D1": 24 * 60 * 60,
 }
@@ -78,6 +79,7 @@ TIMEFRAME_RULES = {
     "M15": "15min",
     "M30": "30min",
     "H1": "1h",
+    "H2": "2h",
     "H4": "4h",
     "D1": "1d",
 }
@@ -130,7 +132,15 @@ def _normalize_timeframe(value: Optional[str]) -> str:
         "SECOND": "S1",
         "SECONDS": "S1",
         "1M": "M1",
+        "5M": "M5",
+        "15M": "M15",
+        "30M": "M30",
+        "60M": "H1",
+        "120M": "H2",
+        "240M": "H4",
         "1H": "H1",
+        "2H": "H2",
+        "4H": "H4",
     }
     return aliases.get(raw, raw)
 

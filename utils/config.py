@@ -48,6 +48,15 @@ def get_env(key: str, default: Any = None, cast: type = str) -> Any:
         return value
 
 
+def get_env_list(key: str, default: Optional[list] = None) -> list:
+    """Get comma-separated environment variable as list of strings."""
+    value = os.getenv(key)
+    if value is None:
+        return list(default or [])
+    items = [part.strip() for part in str(value).split(",")]
+    return [part for part in items if part]
+
+
 @dataclass
 class MT5Config:
     """MetaTrader 5 connection configuration."""
@@ -117,6 +126,26 @@ class UIConfig:
 
 
 @dataclass
+class TrendBiasFilterConfig:
+    """Global multi-timeframe trend bias filter configuration."""
+    enabled: bool = field(default_factory=lambda: get_env("TREND_BIAS_FILTER_ENABLED", False, bool))
+    timeframes_count: int = field(default_factory=lambda: get_env("TREND_BIAS_TF_COUNT", 4, int))
+    timeframe_ladder: list = field(
+        default_factory=lambda: get_env_list(
+            "TREND_BIAS_TF_LADDER",
+            ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "D1", "W1"],
+        )
+    )
+    lookback_bars: int = field(default_factory=lambda: get_env("TREND_BIAS_LOOKBACK_BARS", 250, int))
+    ema_fast_period: int = field(default_factory=lambda: get_env("TREND_BIAS_EMA_FAST", 50, int))
+    ema_slow_period: int = field(default_factory=lambda: get_env("TREND_BIAS_EMA_SLOW", 200, int))
+    slope_lookback: int = field(default_factory=lambda: get_env("TREND_BIAS_SLOPE_LOOKBACK", 5, int))
+    min_slope_pips: float = field(default_factory=lambda: get_env("TREND_BIAS_MIN_SLOPE_PIPS", 0.0, float))
+    up_score_threshold: float = field(default_factory=lambda: get_env("TREND_BIAS_UP_SCORE_THRESHOLD", 0.5, float))
+    down_score_threshold: float = field(default_factory=lambda: get_env("TREND_BIAS_DOWN_SCORE_THRESHOLD", 0.5, float))
+
+
+@dataclass
 class Config:
     """Main configuration class."""
     mt5: MT5Config = field(default_factory=MT5Config)
@@ -126,6 +155,7 @@ class Config:
     trading: TradingConfig = field(default_factory=TradingConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    trend_bias_filter: TrendBiasFilterConfig = field(default_factory=TrendBiasFilterConfig)
 
     def to_dict(self) -> dict:
         """Convert config to dictionary."""
@@ -178,6 +208,18 @@ class Config:
             "ui": {
                 "refresh_rate": self.ui.refresh_rate,
                 "theme": self.ui.theme,
+            },
+            "trend_bias_filter": {
+                "enabled": self.trend_bias_filter.enabled,
+                "timeframes_count": self.trend_bias_filter.timeframes_count,
+                "timeframe_ladder": list(self.trend_bias_filter.timeframe_ladder),
+                "lookback_bars": self.trend_bias_filter.lookback_bars,
+                "ema_fast_period": self.trend_bias_filter.ema_fast_period,
+                "ema_slow_period": self.trend_bias_filter.ema_slow_period,
+                "slope_lookback": self.trend_bias_filter.slope_lookback,
+                "min_slope_pips": self.trend_bias_filter.min_slope_pips,
+                "up_score_threshold": self.trend_bias_filter.up_score_threshold,
+                "down_score_threshold": self.trend_bias_filter.down_score_threshold,
             },
         }
 

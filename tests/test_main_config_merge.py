@@ -11,6 +11,7 @@ def base_config():
         "trading": {"check_interval": 1},
         "logging": {"level": "INFO"},
         "ui": {"theme": "light"},
+        "trend_bias_filter": {"enabled": False},
         "alerts": {"telegram": {"enabled": False}, "discord": {"enabled": False}},
     }
 
@@ -44,3 +45,24 @@ def test_yaml_risk_capital_base_applies_when_env_not_set(monkeypatch, base_confi
     bot._merge_config({"risk": {"capital_base": 10000.0}})
 
     assert bot.config["risk"]["capital_base"] == 10000.0
+
+
+def test_yaml_trend_bias_filter_applies_when_env_not_set(monkeypatch, base_config):
+    monkeypatch.delenv("TREND_BIAS_FILTER_ENABLED", raising=False)
+    bot = TradingBot()
+    bot.config = base_config
+
+    bot._merge_config({"trend_bias_filter": {"enabled": True}})
+
+    assert bot.config["trend_bias_filter"]["enabled"] is True
+
+
+def test_env_trend_bias_filter_keeps_precedence_over_yaml(monkeypatch, base_config):
+    monkeypatch.setenv("TREND_BIAS_FILTER_ENABLED", "true")
+    bot = TradingBot()
+    bot.config = base_config
+    bot.config["trend_bias_filter"]["enabled"] = True
+
+    bot._merge_config({"trend_bias_filter": {"enabled": False}})
+
+    assert bot.config["trend_bias_filter"]["enabled"] is True

@@ -1,13 +1,13 @@
 # SMC Scalper Strategy Configuration
 
 name: "SMC Scalper"
-enabled: false
+enabled: true
 description: "Smart Money Concepts scalping with trend-aligned short filter and session risk controls"
 
 symbols:
   - XAUUSD
 
-timeframe: M5
+timeframe: M1
 magic_number: 789123
 
 parameters:
@@ -78,6 +78,19 @@ execution_filters:
   max_spread_points: 0       # 0 = disabled
   cooldown_bars_after_loss: 2
   max_consecutive_losses: 3
+
+# Core multi-timeframe trend bias gate (override global settings.yaml/.env)
+trend_bias_filter:
+  enabled: true
+  timeframes_count: 4
+  timeframe_ladder: [M1, M5, M15, M30, H1, H2, H4, D1, W1]
+  lookback_bars: 250
+  ema_fast_period: 50
+  ema_slow_period: 200
+  slope_lookback: 5
+  min_slope_pips: 0.0
+  up_score_threshold: 0.5
+  down_score_threshold: 0.5
 
 alerts:
   telegram: true
