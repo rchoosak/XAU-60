@@ -1,0 +1,76 @@
+# SMC Scalper Strategy Configuration
+
+name: "SMC Scalper"
+enabled: false
+description: "SMC Scalper Aggressive+Safe profile"
+
+symbols:
+  - XAUUSD
+
+timeframe: M1
+magic_number: 789123
+
+parameters:
+  # CHoCH Detection
+  choch_lookback: 24        # 50
+
+  # Fair Value Gap
+  fvg_min_pips: 0.8         # 5.0
+  fvg_lookback: 22          # 20
+
+  # Order Block
+  ob_lookback: 18           # 20
+
+  # Trade Management
+  risk_reward: 2.2          # Increase TP distance relative to SL
+  trailing_stop: true
+  trailing_pips: 50.0       # Backward-compatible fixed trailing distance
+  trailing_start_pips: 150.0  # Start trailing only after this floating profit (pips)
+  trailing_pips_wide: 120.0 # Stage 1: wider trailing distance
+  tighten_after_profit_pips: 280.0  # Switch to tight trailing after profit reaches this level
+  trailing_pips_tight: 60.0 # Stage 2: tighter trailing distance
+
+  # Stop Loss
+  use_atr_sl: true          # ATR SL on M1 was too tight in live
+  atr_period: 14
+  atr_multiplier: 1.35
+  stop_loss_pips: 130.0     # 150 pips = 15.0 XAU price (point=0.01)
+
+risk:
+  max_risk_percent: 0.8
+  lot_size: 0               # 0 = use global risk.lot_size from settings/.env. Force fixed lot to avoid 100.0 volume spikes
+  capital_base: 0.0         # 0 = use global risk.capital_base from settings/.env
+
+session:
+  use_time_filter: true
+  timezone: "Asia/Bangkok"
+  data_timezone: "UTC"
+  start_hour: 9
+  end_hour: 22
+  trade_friday: false
+
+debug:
+  enabled: false
+  log_every_n_bars: 25
+  include_pass_logs: false
+
+decision_logging:
+  enabled: true
+  log_passed: true
+  log_blocked: true
+  log_no_signal: false
+  log_executor_rejected: true
+
+execution_filters:
+  enabled: true
+  allow_long: true
+  allow_short: true
+  blocked_hours: []          # ex: [0, 1, "13-15"]
+  blocked_weekdays: []       # ex: [mon, tue] or [0, 1]
+  max_spread_points: 0       # 0 = disabled
+  cooldown_bars_after_loss: 3
+  max_consecutive_losses: 3
+
+alerts:
+  telegram: true
+  discord: true

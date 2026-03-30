@@ -4,7 +4,7 @@
 settings_path: config/settings.yaml
 
 symbol: XAUUSD
-timeframe: M1
+timeframe: M5
 warmup: 200
 
 journal:

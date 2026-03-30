@@ -48,6 +48,12 @@ class SMCScalper(StrategyBase):
         self.atr_multiplier = 2.0
         self.use_atr_sl = True
         self.stop_loss_pips = 100.0
+        self.trend_filter_enabled = False
+        self.trend_ema_period = 200
+        self.trend_slope_lookback = 20
+        self.trend_min_slope_pips = 0.0
+        self.require_trend_for_buy = True
+        self.require_trend_for_sell = True
 
         # Session filter
         self.use_time_filter = True
@@ -85,6 +91,12 @@ class SMCScalper(StrategyBase):
         self.atr_period = params.get("atr_period", 14)
         self.atr_multiplier = params.get("atr_multiplier", 2.0)
         self.use_atr_sl = params.get("use_atr_sl", True)
+        self.trend_filter_enabled = bool(params.get("trend_filter_enabled", False))
+        self.trend_ema_period = max(2, int(params.get("trend_ema_period", 200)))
+        self.trend_slope_lookback = max(1, int(params.get("trend_slope_lookback", 20)))
+        self.trend_min_slope_pips = float(params.get("trend_min_slope_pips", 0.0))
+        self.require_trend_for_buy = bool(params.get("require_trend_for_buy", True))
+        self.require_trend_for_sell = bool(params.get("require_trend_for_sell", True))
         risk = config.get("risk", {})
         self.stop_loss_pips = risk.get("stop_loss_pips", params.get("stop_loss_pips", 100.0))
 
@@ -132,12 +144,18 @@ class SMCScalper(StrategyBase):
         if self.smc is None:
             self._debug_log(symbol, data, "skip", "smc_not_initialized")
             return None
-        if len(data) < self.choch_lookback:
+        minimum_bars = self.choch_lookback
+        if self.trend_filter_enabled:
+            minimum_bars = max(
+                minimum_bars,
+                self.trend_slope_lookback + 2,
+            )
+        if len(data) < minimum_bars:
             self._debug_log(
                 symbol,
                 data,
                 "skip",
-                f"insufficient_bars len={len(data)} required={self.choch_lookback}",
+                f"insufficient_bars len={len(data)} required={minimum_bars}",
             )
             return None
 
@@ -191,6 +209,10 @@ class SMCScalper(StrategyBase):
         ob = self.smc.detect_bearish_order_block(data, self.ob_lookback)
         if not ob:
             return None, "no_bearish_order_block"
+
+        trend_ok, trend_reason = self._evaluate_trend_alignment(symbol, data, is_buy=True)
+        if not trend_ok:
+            return None, trend_reason
 
         current_price = data.iloc[-1]["close"]
 
@@ -251,6 +273,10 @@ class SMCScalper(StrategyBase):
         ob = self.smc.detect_bullish_order_block(data, self.ob_lookback)
         if not ob:
             return None, "no_bullish_order_block"
+
+        trend_ok, trend_reason = self._evaluate_trend_alignment(symbol, data, is_buy=False)
+        if not trend_ok:
+            return None, trend_reason
 
         current_price = data.iloc[-1]["close"]
 
@@ -386,6 +412,72 @@ class SMCScalper(StrategyBase):
         if "XAU" in symbol or "GOLD" in symbol:
             return 0.01
         return 0.0001
+
+    def _evaluate_trend_alignment(
+        self, symbol: str, data: pd.DataFrame, is_buy: bool
+    ) -> tuple[bool, str]:
+        """Validate that setup direction is aligned with trend filter settings."""
+        if not self.trend_filter_enabled:
+            return True, "trend_filter_disabled"
+
+        if is_buy and not self.require_trend_for_buy:
+            return True, "trend_filter_buy_not_required"
+        if not is_buy and not self.require_trend_for_sell:
+            return True, "trend_filter_sell_not_required"
+
+        required_bars = max(3, self.trend_slope_lookback + 2)
+        if len(data) < required_bars:
+            return (
+                False,
+                f"trend_filter_insufficient_bars len={len(data)} required={required_bars}",
+            )
+
+        close_series = data["close"].astype(float)
+        effective_ema_period = min(self.trend_ema_period, max(2, len(close_series) - 1))
+        effective_slope_lookback = min(self.trend_slope_lookback, len(close_series) - 2)
+        ema_series = close_series.ewm(span=effective_ema_period, adjust=False).mean()
+        ema_now = float(ema_series.iloc[-1])
+        ema_prev = float(ema_series.iloc[-1 - effective_slope_lookback])
+        ema_slope = ema_now - ema_prev
+        current_price = float(close_series.iloc[-1])
+        min_slope_price = self._pips_to_price(symbol, self.trend_min_slope_pips)
+
+        if is_buy:
+            if current_price < ema_now:
+                return (
+                    False,
+                    "trend_filter_buy_blocked "
+                    f"close={current_price:.4f} ema={ema_now:.4f}",
+                )
+            if ema_slope < min_slope_price:
+                return (
+                    False,
+                    "trend_filter_buy_slope_blocked "
+                    f"slope={ema_slope:.4f} min_slope={min_slope_price:.4f}",
+                )
+            return (
+                True,
+                "trend_filter_buy_pass "
+                f"close={current_price:.4f} ema={ema_now:.4f} slope={ema_slope:.4f}",
+            )
+
+        if current_price > ema_now:
+            return (
+                False,
+                "trend_filter_sell_blocked "
+                f"close={current_price:.4f} ema={ema_now:.4f}",
+            )
+        if ema_slope > -min_slope_price:
+            return (
+                False,
+                "trend_filter_sell_slope_blocked "
+                f"slope={ema_slope:.4f} max_slope={-min_slope_price:.4f}",
+            )
+        return (
+            True,
+            "trend_filter_sell_pass "
+            f"close={current_price:.4f} ema={ema_now:.4f} slope={ema_slope:.4f}",
+        )
 
     def _pips_to_price(self, symbol: str, pips: float) -> float:
         return pips * self._point_for_symbol(symbol) * 10

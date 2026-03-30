@@ -2,7 +2,7 @@
 
 name: "SMC Scalper"
 enabled: false
-description: "Smart Money Concepts scalping with trend-aligned short filter and session risk controls"
+description: "Smart Money Concepts scalping with CHoCH, FVG, and Order Blocks"
 
 symbols:
   - XAUUSD
@@ -30,14 +30,6 @@ parameters:
   tighten_after_profit_pips: 500.0  # Switch to tight trailing after profit reaches this level
   trailing_pips_tight: 80.0 # Stage 2: tighter trailing distance
 
-  # Trend Alignment Filter
-  trend_filter_enabled: true
-  trend_ema_period: 200
-  trend_slope_lookback: 20
-  trend_min_slope_pips: 1.5
-  require_trend_for_buy: false
-  require_trend_for_sell: true
-
   # Stop Loss
   use_atr_sl: false         # ATR SL on M1 was too tight in live
   atr_period: 14
@@ -53,13 +45,13 @@ session:
   use_time_filter: false
   timezone: "Asia/Bangkok"
   data_timezone: "UTC"
-  start_hour: 11
-  end_hour: 20
-  trade_friday: false
+  start_hour: 12
+  end_hour: 22
+  trade_friday: true
 
 debug:
-  enabled: false
-  log_every_n_bars: 25
+  enabled: true
+  log_every_n_bars: 1
   include_pass_logs: false
 
 decision_logging:
@@ -76,8 +68,8 @@ execution_filters:
   blocked_hours: []          # ex: [0, 1, "13-15"]
   blocked_weekdays: []       # ex: [mon, tue] or [0, 1]
   max_spread_points: 0       # 0 = disabled
-  cooldown_bars_after_loss: 2
-  max_consecutive_losses: 3
+  cooldown_bars_after_loss: 0
+  max_consecutive_losses: 0
 
 alerts:
   telegram: true

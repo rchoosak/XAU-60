@@ -272,3 +272,76 @@ def test_smc_scalper_trailing_two_stage_wide_then_tight():
         [{"time": datetime(2026, 1, 1, 0, 2), "open": 0.0, "high": 0.0, "low": 0.0, "close": 2060.0, "volume": 1}]
     )
     assert strategy.get_trailing_stop(pos, tight_data) == 2052.0
+
+
+def test_smc_scalper_trend_filter_blocks_sell_in_uptrend():
+    strategy = SMCScalper()
+    cfg = _base_config()
+    cfg["parameters"].update(
+        {
+            "trend_filter_enabled": True,
+            "trend_ema_period": 20,
+            "trend_slope_lookback": 5,
+            "trend_min_slope_pips": 0.0,
+            "require_trend_for_buy": True,
+            "require_trend_for_sell": True,
+        }
+    )
+    strategy.initialize(cfg)
+    strategy.smc = _CaptureLookbackSMC()
+
+    rows = []
+    for i in range(80):
+        price = 1999.2 + (i * 0.02)
+        rows.append(
+            {
+                "time": datetime(2026, 1, 1, 0, 0) + pd.Timedelta(minutes=i * 5),
+                "open": price - 0.05,
+                "high": price + 0.15,
+                "low": price - 0.15,
+                "close": price,
+                "volume": 1,
+            }
+        )
+    data = pd.DataFrame(rows)
+
+    bullish_signal = strategy._check_bullish_setup("XAUUSD", data)
+    assert bullish_signal is not None
+
+    bearish_signal, bearish_reason = strategy._check_bearish_setup_with_reason("XAUUSD", data)
+    assert bearish_signal is None
+    assert bearish_reason.startswith("trend_filter_sell_blocked")
+
+
+def test_smc_scalper_trend_filter_can_skip_sell_requirement():
+    strategy = SMCScalper()
+    cfg = _base_config()
+    cfg["parameters"].update(
+        {
+            "trend_filter_enabled": True,
+            "trend_ema_period": 20,
+            "trend_slope_lookback": 5,
+            "require_trend_for_sell": False,
+        }
+    )
+    strategy.initialize(cfg)
+    strategy.smc = _CaptureLookbackSMC()
+
+    rows = []
+    for i in range(80):
+        price = 1999.2 + (i * 0.02)
+        rows.append(
+            {
+                "time": datetime(2026, 1, 1, 0, 0) + pd.Timedelta(minutes=i * 5),
+                "open": price - 0.05,
+                "high": price + 0.15,
+                "low": price - 0.15,
+                "close": price,
+                "volume": 1,
+            }
+        )
+    data = pd.DataFrame(rows)
+
+    bearish_signal, bearish_reason = strategy._check_bearish_setup_with_reason("XAUUSD", data)
+    assert bearish_signal is not None
+    assert bearish_reason == "ok"
