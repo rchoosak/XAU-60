@@ -10,11 +10,17 @@ from typing import Any, Dict
 from loguru import logger
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
 def _default_path() -> Path:
     custom = os.getenv("TRADE_JOURNAL_FILE", "").strip()
     if custom:
-        return Path(custom)
-    return Path("logs/trade_journal.jsonl")
+        path = Path(custom).expanduser()
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return path
+    return PROJECT_ROOT / "logs" / "trade_journal.jsonl"
 
 
 def _normalize(value: Any) -> Any:

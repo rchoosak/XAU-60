@@ -16,6 +16,7 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -31,6 +32,10 @@ from core.trade_executor import TradeExecutor
 from core.mt5_connector import AccountInfo, SymbolInfo
 from core.strategy_base import Signal, Position
 from core.strategy_loader import StrategyLoader
+from utils.trade_journal import append_trade_event
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 TIMEFRAME_SECONDS = {
@@ -958,6 +963,73 @@ def _print_result(result: Dict[str, Any]) -> None:
     print(f"Profit Factor : {result['profit_factor']}")
 
 
+def _resolve_project_path(path: str) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate
+
+
+def _setup_trade_journal(cfg: Dict[str, Any], config_path: str) -> Path:
+    journal_cfg = _normalize_config_keys(cfg.get("journal", {}) or {})
+    raw_path = str(journal_cfg.get("path", "logs/trade_journal.jsonl")).strip() or "logs/trade_journal.jsonl"
+    journal_path = _resolve_project_path(raw_path)
+    os.environ["TRADE_JOURNAL_FILE"] = str(journal_path)
+
+    if bool(journal_cfg.get("reset_on_start", False)):
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        journal_path.write_text("", encoding="utf-8")
+
+    data_cfg = _normalize_config_keys(cfg.get("data", {}) or {})
+    data_path_raw = str(data_cfg.get("path") or cfg.get("data_path") or "").strip()
+    data_path = str(_resolve_project_path(data_path_raw)) if data_path_raw else None
+
+    append_trade_event(
+        {
+            "mode": "backtest",
+            "event": "RUN_START",
+            "config_path": str(_resolve_project_path(config_path)),
+            "journal_path": str(journal_path),
+            "symbol": cfg.get("symbol") or data_cfg.get("symbol"),
+            "timeframe": cfg.get("timeframe") or data_cfg.get("timeframe"),
+            "data_path": data_path,
+            "start": data_cfg.get("start") or cfg.get("start"),
+            "end": data_cfg.get("end") or cfg.get("end"),
+        }
+    )
+    logger.info(f"Trade journal enabled: {journal_path}")
+    return journal_path
+
+
+def _append_run_end_event(
+    result: Optional[Dict[str, Any]],
+    status: str,
+    error: str = "",
+) -> None:
+    payload: Dict[str, Any] = {
+        "mode": "backtest",
+        "event": "RUN_END",
+        "status": status,
+    }
+    if error:
+        payload["error"] = error
+    if isinstance(result, dict):
+        payload.update(
+            {
+                "symbol": result.get("symbol"),
+                "strategy": result.get("strategy"),
+                "initial_balance": result.get("initial_balance"),
+                "final_balance": result.get("final_balance"),
+                "net_profit": result.get("net_profit"),
+                "total_trades": result.get("total_trades"),
+                "win_rate": result.get("win_rate"),
+                "max_drawdown": result.get("max_drawdown"),
+                "profit_factor": result.get("profit_factor"),
+            }
+        )
+    append_trade_event(payload)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest runner (live-like)")
     parser.add_argument("-f", "--config", default="config/backtest.yaml", help="Path to backtest config")
@@ -1069,31 +1141,46 @@ def main() -> None:
         )
         return cfg, runner, enable_tui, tui_steps, tui_interval
 
-    _, runner, enable_tui, tui_steps, tui_interval = _build_runtime()
+    cfg, runner, enable_tui, tui_steps, tui_interval = _build_runtime()
+    _setup_trade_journal(cfg, args.config)
 
-    if enable_tui:
-        from core.tui_app import BacktestTUI
+    result: Optional[Dict[str, Any]] = None
+    status = "success"
+    error = ""
 
-        def reload_replay_state() -> Tuple[Optional[LiveLikeBotBacktester], str]:
-            try:
-                _, new_runner, _, _, _ = _build_runtime(force_disable_console_log=True)
-                return new_runner, "Config reloaded and simulation restarted."
-            except Exception as e:
-                return None, str(e)
+    try:
+        if enable_tui:
+            from core.tui_app import BacktestTUI
 
-        runner.start()
-        tui = BacktestTUI(
-            runner,
-            steps_per_tick=tui_steps,
-            update_interval=tui_interval,
-            reload_callback=reload_replay_state,
-        )
-        tui.run()
-        result = tui.backtester._compute_results()
-    else:
-        result = runner.run()
+            def reload_replay_state() -> Tuple[Optional[LiveLikeBotBacktester], str]:
+                try:
+                    _, new_runner, _, _, _ = _build_runtime(force_disable_console_log=True)
+                    return new_runner, "Config reloaded and simulation restarted."
+                except Exception as e:
+                    return None, str(e)
 
-    _print_result(result)
+            runner.start()
+            tui = BacktestTUI(
+                runner,
+                steps_per_tick=tui_steps,
+                update_interval=tui_interval,
+                reload_callback=reload_replay_state,
+            )
+            tui.run()
+            result = tui.backtester._compute_results()
+        else:
+            result = runner.run()
+
+        _print_result(result)
+    except KeyboardInterrupt:
+        status = "interrupted"
+        raise
+    except Exception as exc:
+        status = "error"
+        error = str(exc)
+        raise
+    finally:
+        _append_run_end_event(result=result, status=status, error=error)
 
 
 if __name__ == "__main__":

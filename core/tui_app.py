@@ -37,16 +37,34 @@ class BacktestInfoWidget(Static):
         self.backtester = backtester
 
     def on_mount(self):
+        self.set_interval(0.5, self.refresh_info)
         self.refresh_info()
+
+    def _clip(self, value: str, reserve: int = 22) -> str:
+        """Clip text to fit panel width and avoid overflowing the Backtest Info box."""
+        text = str(value or "")
+        panel_width = self.size.width or 0
+        max_len = panel_width - reserve if panel_width > reserve else 48
+        max_len = max(16, max_len)
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 3] + "..."
 
     def refresh_info(self):
         table = Table.grid(expand=True)
         table.add_column("Key", style="cyan")
-        table.add_column("Value", style="bold white")
-        
+        table.add_column("Value", style="bold white", overflow="ellipsis", no_wrap=True)
+
+        enabled = []
+        if hasattr(self.backtester, "bot") and hasattr(self.backtester.bot, "strategy_loader"):
+            enabled = list(self.backtester.bot.strategy_loader.get_enabled_strategies().keys())
+        strategy_name = ", ".join(enabled) if enabled else str(self.backtester.executor.__class__.__name__)
+        strategy_desc = getattr(self.backtester.executor, "description", "") or "-"
+
         table.add_row("Symbol", self.backtester.symbol)
         table.add_row("Timeframe", self.backtester.config.get("timeframe", "N/A"))
-        table.add_row("Strategy", str(self.backtester.executor.__class__.__name__))
+        table.add_row("Strategy", self._clip(strategy_name))
+        table.add_row("Description", self._clip(strategy_desc))
         table.add_row("Warmup", str(self.backtester.warmup))
         
         self.update(Panel(table, title="Backtest Info", border_style="yellow"))
@@ -66,11 +84,13 @@ class StatsWidget(Static):
         table.add_column("Value", style="bold white")
         
         profit = self.backtester.equity - self.backtester.initial_balance
+        profit_pct = (profit / self.backtester.initial_balance * 100.0) if self.backtester.initial_balance else 0.0
         profit_color = "green" if profit >= 0 else "red"
         
         table.add_row("Balance", f"${self.backtester.balance:,.2f}")
         table.add_row("Equity", f"${self.backtester.equity:,.2f}")
         table.add_row("Profit ($)", Text(f"${profit:,.2f}", style=profit_color))
+        table.add_row("Profit (%)", Text(f"{profit_pct:+.2f}%", style=profit_color))
         table.add_row("Trades", str(len(self.backtester.trades)))
         
         self.update(Panel(table, title="Account Info", border_style="green"))
