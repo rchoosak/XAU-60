@@ -1,6 +1,6 @@
 name: Adaptive Volatility Grid
 version: 1.0.0
-enabled: false
+enabled: true
 description: ATR-adaptive mean-reversion grid with ADX trend filter
 symbols:
 - XAUUSD

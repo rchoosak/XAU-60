@@ -1,6 +1,6 @@
 name: Adaptive Volatility Grid
 version: 1.0.0
-enabled: false
+enabled: true
 description: ATR-adaptive mean-reversion grid with ADX trend filter
 symbols:
 - XAUUSD
@@ -13,14 +13,14 @@ parameters:
   max_grid_spacing_pips: 300.0
   anchor_ema_period: 34
   trend_adx_period: 14
-  trend_adx_max: 31.0
+  trend_adx_max: 29.0
   rsi_period: 14
   rsi_oversold: 35.0
   rsi_overbought: 65.0
-  buy_rsi_oversold: 37.0
-  sell_rsi_overbought: 66.0
+  buy_rsi_oversold: 35.0
+  sell_rsi_overbought: 68.0
   buy_grid_spacing_multiplier: 1.0
-  sell_grid_spacing_multiplier: 1.1
+  sell_grid_spacing_multiplier: 1.2
   sell_trend_adx_max: 20.0
   sell_require_rsi_rollover: true
   sell_require_bearish_candle: true
@@ -28,8 +28,8 @@ parameters:
   risk_reward: 1.6
   take_profit_spacing_multiplier: 1.0
   cooldown_bars: 1
-  reentry_spacing_factor: 0.5
-  max_signals_per_day: 80
+  reentry_spacing_factor: 0.7
+  max_signals_per_day: 40
 risk:
   stop_loss_atr_multiplier: 1.8
   stop_loss_min_pips: 120.0
@@ -44,7 +44,7 @@ risk:
   trailing_pips_wide: 200.0
   tighten_after_profit_pips: 500.0
   trailing_pips_tight: 80.0
-  max_risk_percent: 1.5
+  max_risk_percent: 1.0
   lot_size: 0
 session:
   use_time_filter: true
@@ -57,8 +57,16 @@ execution_filters:
   enabled: true
   allow_long: true
   allow_short: true
-  blocked_hours: []
-  blocked_weekdays: []
+  blocked_hours:
+  - 6
+  - 12
+  - 13
+  - 16
+  - 17
+  - 19
+  blocked_weekdays:
+  - tue
+  - thu
   cooldown_bars_after_loss: 0
   max_consecutive_losses: 0
 alerts:
