@@ -52,6 +52,16 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.rsi_oversold = 35.0
         self.rsi_overbought = 65.0
 
+        # Side-specific signal tuning
+        self.buy_rsi_oversold = 35.0
+        self.sell_rsi_overbought = 65.0
+        self.buy_grid_spacing_multiplier = 1.0
+        self.sell_grid_spacing_multiplier = 1.0
+        self.sell_trend_adx_max = 28.0
+        self.sell_require_rsi_rollover = False
+        self.sell_require_bearish_candle = False
+        self.sell_anchor_slope_max_pips = 0.0
+
         self.risk_reward = 1.6
         self.take_profit_spacing_multiplier = 1.0
 
@@ -63,6 +73,10 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.stop_loss_atr_multiplier = 1.8
         self.stop_loss_min_pips = 120.0
         self.stop_loss_max_pips = 500.0
+        self.sell_stop_loss_atr_multiplier = 1.8
+        self.sell_stop_loss_min_pips = 120.0
+        self.sell_stop_loss_max_pips = 500.0
+        self.sell_risk_reward = 1.6
         self.use_trailing_stop = True
         self.trailing_pips = 120.0
         self.trailing_start_pips = 0.0
@@ -109,6 +123,14 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.rsi_period = int(params.get("rsi_period", 14))
         self.rsi_oversold = float(params.get("rsi_oversold", 35.0))
         self.rsi_overbought = float(params.get("rsi_overbought", 65.0))
+        self.buy_rsi_oversold = float(params.get("buy_rsi_oversold", self.rsi_oversold))
+        self.sell_rsi_overbought = float(params.get("sell_rsi_overbought", self.rsi_overbought))
+        self.buy_grid_spacing_multiplier = max(0.5, float(params.get("buy_grid_spacing_multiplier", 1.0)))
+        self.sell_grid_spacing_multiplier = max(0.5, float(params.get("sell_grid_spacing_multiplier", 1.0)))
+        self.sell_trend_adx_max = float(params.get("sell_trend_adx_max", self.trend_adx_max))
+        self.sell_require_rsi_rollover = bool(params.get("sell_require_rsi_rollover", False))
+        self.sell_require_bearish_candle = bool(params.get("sell_require_bearish_candle", False))
+        self.sell_anchor_slope_max_pips = float(params.get("sell_anchor_slope_max_pips", 0.0))
 
         self.risk_reward = float(params.get("risk_reward", 1.6))
         self.take_profit_spacing_multiplier = float(
@@ -122,6 +144,16 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.stop_loss_atr_multiplier = float(risk.get("stop_loss_atr_multiplier", 1.8))
         self.stop_loss_min_pips = float(risk.get("stop_loss_min_pips", 120.0))
         self.stop_loss_max_pips = float(risk.get("stop_loss_max_pips", 500.0))
+        self.sell_stop_loss_atr_multiplier = float(
+            risk.get("sell_stop_loss_atr_multiplier", self.stop_loss_atr_multiplier)
+        )
+        self.sell_stop_loss_min_pips = float(
+            risk.get("sell_stop_loss_min_pips", self.stop_loss_min_pips)
+        )
+        self.sell_stop_loss_max_pips = float(
+            risk.get("sell_stop_loss_max_pips", self.stop_loss_max_pips)
+        )
+        self.sell_risk_reward = float(risk.get("sell_risk_reward", self.risk_reward))
         self.use_trailing_stop = bool(risk.get("trailing_stop", True))
         self.trailing_pips = float(risk.get("trailing_pips", 120.0))
         self.trailing_start_pips = float(risk.get("trailing_start_pips", 0.0))
@@ -184,28 +216,62 @@ class AdaptiveVolatilityGrid(StrategyBase):
             return None
 
         try:
-            atr = float(calculate_atr(data, self.atr_period).iloc[-1])
-            adx = float(calculate_adx(data, self.trend_adx_period).iloc[-1])
-            rsi = float(calculate_rsi(data, self.rsi_period).iloc[-1])
-            anchor = float(calculate_ema(data, self.anchor_ema_period).iloc[-1])
+            atr_series = calculate_atr(data, self.atr_period)
+            adx_series = calculate_adx(data, self.trend_adx_period)
+            rsi_series = calculate_rsi(data, self.rsi_period)
+            anchor_series = calculate_ema(data, self.anchor_ema_period)
+
+            atr = float(atr_series.iloc[-1])
+            adx = float(adx_series.iloc[-1])
+            rsi = float(rsi_series.iloc[-1])
+            prev_rsi = float(rsi_series.iloc[-2])
+            anchor = float(anchor_series.iloc[-1])
+            prev_anchor = float(anchor_series.iloc[-2])
         except Exception:
             return None
 
-        if pd.isna(atr) or pd.isna(adx) or pd.isna(rsi) or pd.isna(anchor):
-            return None
-
-        if adx > self.trend_adx_max:
+        if (
+            pd.isna(atr)
+            or pd.isna(adx)
+            or pd.isna(rsi)
+            or pd.isna(prev_rsi)
+            or pd.isna(anchor)
+            or pd.isna(prev_anchor)
+        ):
             return None
 
         current_price = float(data.iloc[-1]["close"])
+        current_open = float(data.iloc[-1]["open"])
         spacing = self._resolve_grid_spacing(symbol, atr)
         if spacing <= 0:
             return None
 
+        buy_spacing = spacing * self.buy_grid_spacing_multiplier
+        sell_spacing = spacing * self.sell_grid_spacing_multiplier
+        anchor_slope = anchor - prev_anchor
+        sell_slope_limit = self._pips_to_price(symbol, self.sell_anchor_slope_max_pips)
+
+        long_setup = (
+            adx <= self.trend_adx_max
+            and current_price <= anchor - buy_spacing
+            and rsi <= self.buy_rsi_oversold
+        )
+        short_setup = (
+            adx <= self.sell_trend_adx_max
+            and current_price >= anchor + sell_spacing
+            and rsi >= self.sell_rsi_overbought
+        )
+        if short_setup and self.sell_require_rsi_rollover:
+            short_setup = rsi < prev_rsi
+        if short_setup and self.sell_require_bearish_candle:
+            short_setup = current_price < current_open
+        if short_setup and self.sell_anchor_slope_max_pips > 0:
+            short_setup = anchor_slope <= sell_slope_limit
+
         signal = Signal.HOLD
-        if current_price <= anchor - spacing and rsi <= self.rsi_oversold:
+        if long_setup:
             signal = Signal.BUY
-        elif current_price >= anchor + spacing and rsi >= self.rsi_overbought:
+        elif short_setup:
             signal = Signal.SELL
         else:
             return None
@@ -272,24 +338,33 @@ class AdaptiveVolatilityGrid(StrategyBase):
         atr: float,
         spacing: float,
     ) -> Optional[TradeSignal]:
-        min_sl_distance = self._pips_to_price(symbol, self.stop_loss_min_pips)
-        max_sl_distance = self._pips_to_price(symbol, self.stop_loss_max_pips)
-
-        stop_distance = max(min_sl_distance, atr * self.stop_loss_atr_multiplier)
-        if max_sl_distance > 0:
-            stop_distance = min(stop_distance, max_sl_distance)
-        if stop_distance <= 0:
-            return None
-
-        tp_from_spacing = spacing * self.take_profit_spacing_multiplier
-        tp_from_rr = stop_distance * self.risk_reward
-        take_profit_distance = max(tp_from_spacing, tp_from_rr)
-
         if signal == Signal.BUY:
+            min_sl_distance = self._pips_to_price(symbol, self.stop_loss_min_pips)
+            max_sl_distance = self._pips_to_price(symbol, self.stop_loss_max_pips)
+            stop_distance = max(min_sl_distance, atr * self.stop_loss_atr_multiplier)
+            if max_sl_distance > 0:
+                stop_distance = min(stop_distance, max_sl_distance)
+            if stop_distance <= 0:
+                return None
+
+            tp_from_spacing = spacing * self.take_profit_spacing_multiplier
+            tp_from_rr = stop_distance * self.risk_reward
+            take_profit_distance = max(tp_from_spacing, tp_from_rr)
             stop_loss = entry_price - stop_distance
             take_profit = entry_price + take_profit_distance
             comment = "AVG_GRID_BUY"
         elif signal == Signal.SELL:
+            min_sl_distance = self._pips_to_price(symbol, self.sell_stop_loss_min_pips)
+            max_sl_distance = self._pips_to_price(symbol, self.sell_stop_loss_max_pips)
+            stop_distance = max(min_sl_distance, atr * self.sell_stop_loss_atr_multiplier)
+            if max_sl_distance > 0:
+                stop_distance = min(stop_distance, max_sl_distance)
+            if stop_distance <= 0:
+                return None
+
+            tp_from_spacing = spacing * self.take_profit_spacing_multiplier
+            tp_from_rr = stop_distance * self.sell_risk_reward
+            take_profit_distance = max(tp_from_spacing, tp_from_rr)
             stop_loss = entry_price + stop_distance
             take_profit = entry_price - take_profit_distance
             comment = "AVG_GRID_SELL"
