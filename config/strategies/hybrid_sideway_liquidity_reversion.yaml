@@ -1,0 +1,93 @@
+name: Hybrid Sideway Liquidity Reversion
+version: 1.0.0-aggressive
+enabled: false
+description: "Aggressive profile: higher frequency, lower threshold, wider session"
+symbols:
+  - XAUUSD
+timeframe: M1
+magic_number: 790901
+
+parameters:
+  regime_atr_fast: 14
+  regime_atr_slow: 100
+  regime_adx_max: 60.0
+  regime_ema_period: 50
+  regime_slope_lookback: 12
+  regime_slope_max_atr: 2.0
+  regime_overlap_lookback: 20
+  regime_overlap_min: 0.20
+  regime_expansion_atr_multiple: 1.8
+  regime_expansion_ratio_max: 1.0
+  regime_score_min: 20.0
+  regime_filter_enabled: false
+
+  range_lookback: 60
+  range_min_width_pips: 40.0
+  range_max_width_pips: 2200.0
+  range_touch_tolerance_pips: 30.0
+  range_min_touches_per_side: 1
+  range_filter_enabled: false
+  edge_buffer_pips: 30.0
+  reclaim_buffer_pips: 4.0
+
+  sweep_depth_pips: 12.0
+  wick_ratio_min: 0.5
+  breakout_accept_buffer_pips: 10.0
+  breakout_accept_bars: 2
+  breakout_state_expire_bars: 6
+  failed_breakout_reentry_bars: 4
+  breakout_body_atr_min: 2.0
+
+  allow_internal_scalp: true
+  edge_require_rejection: false
+  internal_scalp_trigger_fraction: 0.10
+  internal_scalp_min_distance_pips: 14.0
+
+  momentum_rsi_period: 14
+  edge_model_adx_max: 40.0
+  cooldown_bars: 1
+  reentry_spacing_factor: 0.2
+  max_signals_per_day: 80
+
+risk:
+  edge_stop_atr_mult: 0.9
+  sweep_stop_atr_mult: 1.0
+  fade_stop_atr_mult: 1.0
+  scalp_stop_atr_mult: 0.7
+  edge_min_rr: 0.9
+  sweep_min_rr: 1.0
+  fade_min_rr: 1.0
+  scalp_min_rr: 0.7
+  stop_loss_min_pips: 40.0
+  stop_loss_max_pips: 400.0
+  trailing_stop: true
+  trailing_start_pips: 60.0
+  trailing_pips: 70.0
+  max_risk_percent: 0.8
+  lot_size: 0
+
+session:
+  use_time_filter: true
+  timezone: Asia/Bangkok
+  data_timezone: UTC
+  start_hour: 0
+  end_hour: 23
+  trade_friday: true
+
+execution_filters:
+  enabled: true
+  allow_long: true
+  allow_short: true
+  blocked_hours: []
+  blocked_weekdays: []
+
+decision_logging:
+  enabled: true
+  log_passed: true
+  log_blocked: true
+  log_no_signal: false
+  log_executor_rejected: true
+
+alerts:
+  telegram: true
+  discord: true

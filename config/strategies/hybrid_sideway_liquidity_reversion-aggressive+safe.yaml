@@ -1,0 +1,93 @@
+name: Hybrid Sideway Liquidity Reversion
+version: 1.0.0-aggressive-safe
+enabled: false
+description: "Aggressive+Safe profile: high opportunity with bounded risk"
+symbols:
+  - XAUUSD
+timeframe: M1
+magic_number: 790901
+
+parameters:
+  regime_atr_fast: 14
+  regime_atr_slow: 100
+  regime_adx_max: 40.0
+  regime_ema_period: 50
+  regime_slope_lookback: 12
+  regime_slope_max_atr: 1.2
+  regime_overlap_lookback: 20
+  regime_overlap_min: 0.30
+  regime_expansion_atr_multiple: 1.8
+  regime_expansion_ratio_max: 0.90
+  regime_score_min: 35.0
+  regime_filter_enabled: false
+
+  range_lookback: 72
+  range_min_width_pips: 55.0
+  range_max_width_pips: 1800.0
+  range_touch_tolerance_pips: 24.0
+  range_min_touches_per_side: 1
+  range_filter_enabled: false
+  edge_buffer_pips: 24.0
+  reclaim_buffer_pips: 6.0
+
+  sweep_depth_pips: 14.0
+  wick_ratio_min: 0.7
+  breakout_accept_buffer_pips: 10.0
+  breakout_accept_bars: 3
+  breakout_state_expire_bars: 6
+  failed_breakout_reentry_bars: 3
+  breakout_body_atr_min: 1.4
+
+  allow_internal_scalp: true
+  edge_require_rejection: true
+  internal_scalp_trigger_fraction: 0.18
+  internal_scalp_min_distance_pips: 14.0
+
+  momentum_rsi_period: 14
+  edge_model_adx_max: 34.0
+  cooldown_bars: 1
+  reentry_spacing_factor: 0.3
+  max_signals_per_day: 48
+
+risk:
+  edge_stop_atr_mult: 0.95
+  sweep_stop_atr_mult: 1.05
+  fade_stop_atr_mult: 1.05
+  scalp_stop_atr_mult: 0.75
+  edge_min_rr: 1.0
+  sweep_min_rr: 1.2
+  fade_min_rr: 1.1
+  scalp_min_rr: 0.8
+  stop_loss_min_pips: 40.0
+  stop_loss_max_pips: 400.0
+  trailing_stop: true
+  trailing_start_pips: 70.0
+  trailing_pips: 80.0
+  max_risk_percent: 0.55
+  lot_size: 0
+
+session:
+  use_time_filter: true
+  timezone: Asia/Bangkok
+  data_timezone: UTC
+  start_hour: 6
+  end_hour: 20
+  trade_friday: true
+
+execution_filters:
+  enabled: true
+  allow_long: true
+  allow_short: true
+  blocked_hours: [12, 13, 16, 17, 18]
+  blocked_weekdays: [tue]
+
+decision_logging:
+  enabled: true
+  log_passed: true
+  log_blocked: true
+  log_no_signal: false
+  log_executor_rejected: true
+
+alerts:
+  telegram: true
+  discord: true
