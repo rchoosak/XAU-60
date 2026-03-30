@@ -88,16 +88,42 @@ python3 scripts/csv_to_parquet.py \
 python3 scripts/run_backtest.py -f config/backtest.yaml
 ```
 
-หรือรันแบบไม่เปิด TUI:
+คำสั่งใช้งานหลัก:
 
 ```bash
+# รันแบบปกติ (ใช้ค่าใน config/backtest.yaml และเปิด/ปิด TUI ตาม config)
+python3 scripts/run_backtest.py -f config/backtest.yaml
+
+# บังคับไม่เปิด TUI
 python3 scripts/run_backtest.py -f config/backtest.yaml --no-tui
+
+# บังคับเปิด TUI
+python3 scripts/run_backtest.py -f config/backtest.yaml --tui
+
+# รันเร็วสุด (Fast mode: ปิด TUI + ปิด log/journal I/O)
+python3 scripts/run_backtest.py -f config/backtest.yaml --fast
+
+# รันเร็ว แต่ยังเก็บ trade_journal ไว้วิเคราะห์
+python3 scripts/run_backtest.py -f config/backtest.yaml --fast --keep-journal
+
+# Override กลยุทธ์เฉพาะรอบนี้
+python3 scripts/run_backtest.py -f config/backtest.yaml --strategy adaptive_volatility_grid
+python3 scripts/run_backtest.py -f config/backtest.yaml --strategies smc_scalper,bollinger_reversion
 ```
 
-ไฟล์ตั้งค่าตัวอย่างอยู่ที่:
+ไฟล์ตั้งค่าหลัก:
 
-```text
+```bash
 config/backtest.yaml
+```
+
+ตัวอย่างส่วนตั้งค่า performance ใน `config/backtest.yaml`:
+
+```yaml
+performance:
+  fast_mode: false
+  quiet: false
+  disable_journal: false
 ```
 
 จุดสำคัญ:
@@ -105,3 +131,5 @@ config/backtest.yaml
 - Risk และ lot sizing จะอิงค่าจริงจาก `.env`/`config/settings.yaml` และ `risk` ของแต่ละ strategy
 - โดย default จะใช้ `enabled` ใน `config/strategies/*.yaml` และใช้ `execution` เฉพาะตอนต้องการ override กลยุทธ์
 - รองรับ TUI แบบเดียวกับ backtest เดิม (`p` pause/resume, `q` quit)
+- `--fast` จะปิด TUI อัตโนมัติ และปิดการเขียน trade journal โดย default
+- ถ้าต้องการ log trade เพื่อวิเคราะห์ต่อ ให้เพิ่ม `--keep-journal` ตอนใช้ `--fast`

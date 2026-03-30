@@ -218,7 +218,9 @@ class ReplayMT5Connector:
         self.lot_step = float(lot_step)
 
         self._data = data.reset_index(drop=True).copy()
-        self._tf_cache: Dict[str, pd.DataFrame] = {self.base_timeframe: self._data[["time", "open", "high", "low", "close", "volume"]].copy()}
+        base_df = self._data[["time", "open", "high", "low", "close", "volume"]].copy()
+        self._tf_cache: Dict[str, pd.DataFrame] = {self.base_timeframe: base_df}
+        self._tf_time_cache: Dict[str, pd.Index] = {self.base_timeframe: base_df["time"]}
         self._cursor = 0
         self._connected = False
 
@@ -398,6 +400,7 @@ class ReplayMT5Connector:
             .reset_index()
         )
         self._tf_cache[tf] = res
+        self._tf_time_cache[tf] = res["time"]
         return res
 
     def get_ohlcv(
@@ -410,14 +413,34 @@ class ReplayMT5Connector:
         if symbol != self.symbol or not self._connected:
             return None
 
-        df = self._resample_ohlcv(timeframe)
-        sub = df[df["time"] <= self.current_time]
-        if start_time is not None:
-            sub = sub[sub["time"] >= start_time]
-        if sub.empty:
+        tf = _normalize_timeframe(timeframe)
+        df = self._resample_ohlcv(tf)
+        if df.empty:
             return None
 
-        return sub.tail(int(count)).reset_index(drop=True)
+        if tf == self.base_timeframe:
+            end_idx = self._cursor + 1
+        else:
+            time_idx = self._tf_time_cache.get(tf, df["time"])
+            end_idx = int(time_idx.searchsorted(self.current_time, side="right"))
+
+        if end_idx <= 0:
+            return None
+
+        window = int(count) if count is not None else 100
+        if window <= 0:
+            window = 100
+
+        if start_time is not None:
+            time_idx = self._tf_time_cache.get(tf, df["time"])
+            start_idx = int(time_idx.searchsorted(start_time, side="left"))
+        else:
+            start_idx = max(0, end_idx - window)
+
+        if start_idx >= end_idx:
+            return None
+
+        return df.iloc[start_idx:end_idx].tail(window).reset_index(drop=True)
 
     def set_forced_exit_price(self, ticket: int, price: float) -> None:
         if ticket in self._positions:
@@ -876,6 +899,8 @@ def _prepare_bot(
     replay_mt5: ReplayMT5Connector,
     selected_strategies: List[str],
     disable_console_log: bool = False,
+    disable_file_log: bool = False,
+    log_level_override: Optional[str] = None,
 ) -> TradingBot:
     bot = TradingBot(config_path=settings_path)
     if not bot.load_config():
@@ -885,9 +910,10 @@ def _prepare_bot(
     from utils.logger import setup_logger
 
     log_cfg = bot.config.get("logging", {})
+    log_level = str(log_level_override).strip().upper() if log_level_override else log_cfg.get("level", "INFO")
     setup_logger(
-        log_file=log_cfg.get("file"),
-        level=log_cfg.get("level", "INFO"),
+        log_file=None if disable_file_log else log_cfg.get("file"),
+        level=log_level,
         rotation=log_cfg.get("rotation", "10 MB"),
         retention=log_cfg.get("retention", "7 days"),
         console=not disable_console_log,
@@ -1037,11 +1063,16 @@ def main() -> None:
     parser.add_argument("--strategies", type=str, help="Override to run many strategies (comma-separated)")
     parser.add_argument("--tui", action="store_true", help="Force enable TUI")
     parser.add_argument("--no-tui", action="store_true", help="Force disable TUI")
+    parser.add_argument("--fast", action="store_true", help="Fast mode: disable TUI/logs/journal I/O for max speed")
+    parser.add_argument("--keep-journal", action="store_true", help="Keep journal writes when --fast is enabled")
+    parser.add_argument("--quiet", action="store_true", help="Suppress console/file logs for faster runs")
     parser.add_argument("--tui-steps", type=int, default=None, help="Backtest steps per TUI frame")
     parser.add_argument("--tui-interval", type=float, default=None, help="TUI frame interval in seconds")
     args = parser.parse_args()
 
-    def _build_runtime(force_disable_console_log: Optional[bool] = None) -> Tuple[Dict[str, Any], LiveLikeBotBacktester, bool, int, float]:
+    def _build_runtime(
+        force_disable_console_log: Optional[bool] = None,
+    ) -> Tuple[Dict[str, Any], LiveLikeBotBacktester, bool, int, float, bool]:
         if not os.path.exists(args.config):
             raise FileNotFoundError(f"Config file not found: {args.config}")
 
@@ -1053,6 +1084,11 @@ def main() -> None:
         sim_cfg = _normalize_config_keys(cfg.get("simulation", {}) or {})
         exec_cfg = _normalize_config_keys(cfg.get("execution", {}) or {})
         tui_cfg = _normalize_config_keys(cfg.get("tui", {}) or {})
+        perf_cfg = _normalize_config_keys(cfg.get("performance", {}) or {})
+
+        fast_mode = bool(perf_cfg.get("fast_mode", False) or args.fast)
+        quiet_mode = bool(perf_cfg.get("quiet", False) or args.quiet or fast_mode)
+        journal_disabled = bool(perf_cfg.get("disable_journal", False) or (fast_mode and not args.keep_journal))
 
         symbol = cfg.get("symbol") or data_cfg.get("symbol") or "XAUUSD"
         base_timeframe = _normalize_timeframe(cfg.get("timeframe") or data_cfg.get("timeframe") or "M1")
@@ -1101,6 +1137,8 @@ def main() -> None:
             enable_tui = True
         if args.no_tui:
             enable_tui = False
+        if fast_mode:
+            enable_tui = False
 
         replay = ReplayMT5Connector(
             symbol=symbol,
@@ -1120,8 +1158,15 @@ def main() -> None:
         )
 
         settings_path = str(cfg.get("settings_path", "config/settings.yaml"))
-        disable_console_log = enable_tui if force_disable_console_log is None else bool(force_disable_console_log)
-        bot = _prepare_bot(settings_path, replay, selected, disable_console_log=disable_console_log)
+        disable_console_log = (enable_tui or quiet_mode) if force_disable_console_log is None else bool(force_disable_console_log or quiet_mode)
+        bot = _prepare_bot(
+            settings_path,
+            replay,
+            selected,
+            disable_console_log=disable_console_log,
+            disable_file_log=quiet_mode,
+            log_level_override="ERROR" if quiet_mode else None,
+        )
 
         stop_priority = str(sim_cfg.get("stop_priority", "sl_first"))
         close_at_end = bool(sim_cfg.get("close_open_positions_at_end", True))
@@ -1139,10 +1184,14 @@ def main() -> None:
         tui_interval = (
             args.tui_interval if args.tui_interval is not None else float(tui_cfg.get("update_interval", 0.05))
         )
-        return cfg, runner, enable_tui, tui_steps, tui_interval
+        return cfg, runner, enable_tui, tui_steps, tui_interval, journal_disabled
 
-    cfg, runner, enable_tui, tui_steps, tui_interval = _build_runtime()
-    _setup_trade_journal(cfg, args.config)
+    cfg, runner, enable_tui, tui_steps, tui_interval, journal_disabled = _build_runtime()
+    if journal_disabled:
+        os.environ["TRADE_JOURNAL_DISABLED"] = "1"
+    else:
+        os.environ.pop("TRADE_JOURNAL_DISABLED", None)
+        _setup_trade_journal(cfg, args.config)
 
     result: Optional[Dict[str, Any]] = None
     status = "success"
@@ -1154,7 +1203,7 @@ def main() -> None:
 
             def reload_replay_state() -> Tuple[Optional[LiveLikeBotBacktester], str]:
                 try:
-                    _, new_runner, _, _, _ = _build_runtime(force_disable_console_log=True)
+                    _, new_runner, _, _, _, _ = _build_runtime(force_disable_console_log=True)
                     return new_runner, "Config reloaded and simulation restarted."
                 except Exception as e:
                     return None, str(e)

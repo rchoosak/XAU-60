@@ -41,3 +41,8 @@ tui:
   enabled: true
   steps_per_tick: 20
   update_interval: 0.05
+
+performance:
+  fast_mode: false
+  quiet: false
+  disable_journal: false

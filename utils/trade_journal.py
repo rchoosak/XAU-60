@@ -23,6 +23,11 @@ def _default_path() -> Path:
     return PROJECT_ROOT / "logs" / "trade_journal.jsonl"
 
 
+def _is_disabled() -> bool:
+    raw = os.getenv("TRADE_JOURNAL_DISABLED", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _normalize(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -33,6 +38,9 @@ def append_trade_event(event: Dict[str, Any]) -> None:
     """
     Append one trade event as JSONL.
     """
+    if _is_disabled():
+        return
+
     path = _default_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 

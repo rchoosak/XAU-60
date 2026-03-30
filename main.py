@@ -310,6 +310,26 @@ class TradingBot:
 
                     # Analyze for signals
                     signal_obj = strategy.analyze(symbol, data)
+                    if not signal_obj or signal_obj.signal.value == 0:
+                        if self._should_log_decision(strategy, "no_signal"):
+                            decision_context = self._build_decision_context(
+                                strategy_name=name,
+                                strategy=strategy,
+                                symbol=symbol,
+                                data=data,
+                                signal=signal_obj,
+                            )
+                            self._log_decision_event(
+                                strategy_name=name,
+                                strategy=strategy,
+                                symbol=symbol,
+                                decision="no_signal",
+                                reason="strategy_returned_hold_or_none",
+                                signal=signal_obj,
+                                context=decision_context,
+                            )
+                        continue
+
                     decision_context = self._build_decision_context(
                         strategy_name=name,
                         strategy=strategy,
@@ -317,18 +337,6 @@ class TradingBot:
                         data=data,
                         signal=signal_obj,
                     )
-
-                    if not signal_obj or signal_obj.signal.value == 0:
-                        self._log_decision_event(
-                            strategy_name=name,
-                            strategy=strategy,
-                            symbol=symbol,
-                            decision="no_signal",
-                            reason="strategy_returned_hold_or_none",
-                            signal=signal_obj,
-                            context=decision_context,
-                        )
-                        continue
 
                     allowed, reason = self._passes_execution_filters(
                         strategy_name=name,
