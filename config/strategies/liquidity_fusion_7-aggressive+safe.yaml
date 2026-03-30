@@ -1,0 +1,72 @@
+name: "Liquidity Fusion 7"
+version: "1.0.0-aggressive-safe"
+enabled: false
+description: "Aggressive+Safe profile: improved frequency with moderated risk"
+
+symbols:
+  - XAUUSD
+
+timeframe: M1
+magic_number: 789888
+
+parameters:
+  lookback: 30
+  sweep_buffer_pips: 4.5
+  sweep_reclaim_ratio: 0.22
+  choch_lookback: 50
+  fvg_lookback: 30
+  ob_lookback: 30
+  bos_lookback: 20
+
+  atr_period: 14
+  rsi_period: 14
+  ema_fast_period: 9
+  ema_slow_period: 21
+  momentum_rsi_buy_min: 49.0
+  momentum_rsi_sell_max: 51.0
+  displacement_atr_min: 0.50
+
+  footprint_wick_ratio_min: 0.30
+  footprint_range_atr_min: 0.7
+  footprint_volume_multiplier: 1.05
+  enable_volume_footprint: true
+
+  min_score: 4.5
+  cooldown_bars: 1
+  max_signals_per_day: 30
+  risk_reward: 1.7
+
+  weights:
+    liquidity_sweep: 2.0
+    order_block: 1.0
+    bos_choch: 1.5
+    fvg: 1.0
+    session: 1.0
+    momentum: 1.5
+    algo_footprint: 1.0
+
+risk:
+  stop_loss_atr_multiplier: 1.4
+  stop_loss_min_pips: 80.0
+  stop_loss_max_pips: 400.0
+  take_profit_min_pips: 90.0
+  trailing_stop: true
+  trailing_pips: 75.0       # Backward-compatible fixed trailing distance
+  trailing_start_pips: 0.0
+  trailing_pips_wide: 110.0
+  tighten_after_profit_pips: 280.0
+  trailing_pips_tight: 48.0
+  max_risk_percent: 0.95
+  lot_size: 0
+
+session:
+  use_time_filter: true
+  timezone: "UTC"
+  data_timezone: "UTC"
+  start_hour: 2
+  end_hour: 22
+  trade_friday: true
+
+alerts:
+  telegram: true
+  discord: true
