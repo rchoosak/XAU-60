@@ -1,7 +1,7 @@
 # SMC Scalper Strategy Configuration
 
 name: "SMC Scalper"
-enabled: true
+enabled: false
 description: "Smart Money Concepts scalping with CHoCH, FVG, and Order Blocks"
 
 symbols:
@@ -53,6 +53,23 @@ debug:
   enabled: true
   log_every_n_bars: 1
   include_pass_logs: false
+
+decision_logging:
+  enabled: true
+  log_passed: true
+  log_blocked: true
+  log_no_signal: false
+  log_executor_rejected: true
+
+execution_filters:
+  enabled: false
+  allow_long: true
+  allow_short: true
+  blocked_hours: []          # ex: [0, 1, "13-15"]
+  blocked_weekdays: []       # ex: [mon, tue] or [0, 1]
+  max_spread_points: 0       # 0 = disabled
+  cooldown_bars_after_loss: 0
+  max_consecutive_losses: 0
 
 alerts:
   telegram: true
