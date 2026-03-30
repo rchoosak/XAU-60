@@ -13,6 +13,29 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, Dict, List, Tuple
 from copy import deepcopy
+
+
+def _is_truthy(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_project_pycache(project_root: Path) -> None:
+    if _is_truthy(os.getenv("PYTHONDONTWRITEBYTECODE", "")):
+        return
+    if str(os.getenv("PYTHONPYCACHEPREFIX", "")).strip():
+        return
+    target = project_root / ".cache" / "pycache"
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    target_str = str(target)
+    if getattr(sys, "pycache_prefix", None) != target_str:
+        sys.pycache_prefix = target_str
+
+
+_configure_project_pycache(Path(__file__).resolve().parent)
+
 import yaml
 from loguru import logger
 
