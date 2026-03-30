@@ -737,14 +737,34 @@ class LiveLikeBotBacktester:
     def _compute_results(self) -> Dict[str, Any]:
         total_trades = len(self.trades)
         net_profit = self.balance - self.initial_balance
+        profit_percent = (net_profit / self.initial_balance * 100.0) if self.initial_balance > 0 else 0.0
         wins = [t for t in self.trades if t.get("profit", 0) > 0]
         losses = [t for t in self.trades if t.get("profit", 0) < 0]
         gross_profit = sum(t.get("profit", 0.0) for t in wins)
         gross_loss = abs(sum(t.get("profit", 0.0) for t in losses))
         max_dd = _calc_max_drawdown(self.equity_curve, self.initial_balance)
+        data_cfg = _normalize_config_keys(self.config.get("data", {}) or {})
+        data_path = data_cfg.get("path") or self.config.get("data_path")
+        data_start = data_cfg.get("start") or self.config.get("start")
+        data_end = data_cfg.get("end") or self.config.get("end")
+        capital_base = None
+        limits = getattr(getattr(self.bot, "risk_manager", None), "limits", None)
+        if limits is not None:
+            try:
+                raw_capital_base = float(getattr(limits, "capital_base", 0.0) or 0.0)
+                if raw_capital_base > 0:
+                    capital_base = raw_capital_base
+            except (TypeError, ValueError):
+                capital_base = None
 
         return {
             "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "data_path": str(data_path) if data_path else "",
+            "data_start": str(data_start) if data_start is not None else "",
+            "data_end": str(data_end) if data_end is not None else "",
+            "profit_percent": round(profit_percent, 2),
+            "capital_base": capital_base,
             "strategy": ",".join(self.bot.strategy_loader.get_enabled_strategies().keys()) or "none",
             "initial_balance": round(self.initial_balance, 2),
             "final_balance": round(self.balance, 2),
@@ -928,6 +948,22 @@ def _prepare_bot(
     if not bot.load_config():
         raise RuntimeError("Failed to load bot config")
 
+    data_start = ""
+    data_end = ""
+    if len(replay_mt5.data) > 0:
+        data_start = str(replay_mt5.data.iloc[0].get("time", ""))
+        data_end = str(replay_mt5.data.iloc[-1].get("time", ""))
+
+    logger.info(
+        "Backtest starting"
+        + (
+            f" | symbol={replay_mt5.symbol} tf={replay_mt5.base_timeframe} "
+            f"range={data_start} -> {data_end}"
+            if data_start or data_end
+            else ""
+        )
+    )
+
     # Use normal logging setup path through bot config.
     from utils.logger import setup_logger
 
@@ -1001,14 +1037,34 @@ def _print_result(result: Dict[str, Any]) -> None:
     print("\n" + "=" * 40)
     print(f" BACKTEST: {result['symbol']}")
     print("=" * 40)
+    run_date = str(result.get("run_date") or "")
+    data_path = str(result.get("data_path") or "")
+    data_start = str(result.get("data_start") or "")
+    data_end = str(result.get("data_end") or "")
+    timeframe = str(result.get("timeframe") or "")
+    profit_percent = float(result.get("profit_percent") or 0.0)
+    capital_base = result.get("capital_base")
+
+    if run_date:
+        print(f"Run Date      : {run_date}")
+    if data_path:
+        print(f"Data File     : {data_path}")
+    if data_start or data_end:
+        print(f"Data Range    : {data_start or '-'} -> {data_end or '-'}")
+    if timeframe:
+        print(f"Timeframe     : {timeframe}")
     print(f"Strategy      : {result['strategy']}")
     print(f"Initial Balance: ${result['initial_balance']:,.2f}")
     print(f"Final Balance : ${result['final_balance']:,.2f}")
     print(f"Net Profit    : ${result['net_profit']:,.2f}")
+    print(f"Profit (%)    : {profit_percent:.2f}%")
+    if capital_base is not None:
+        print(f"Capital Base  : ${float(capital_base):,.2f}")
     print(f"Trades        : {result['total_trades']}")
     print(f"Win Rate      : {result['win_rate']}")
     print(f"Max Drawdown  : {result['max_drawdown']}")
     print(f"Profit Factor : {result['profit_factor']}")
+    print("=" * 40)
 
 
 def _resolve_project_path(path: str) -> Path:
@@ -1083,6 +1139,8 @@ def main() -> None:
     parser.add_argument("-f", "--config", default="config/backtest.yaml", help="Path to backtest config")
     parser.add_argument("--strategy", type=str, help="Override to run one strategy (e.g. smc_scalper)")
     parser.add_argument("--strategies", type=str, help="Override to run many strategies (comma-separated)")
+    parser.add_argument("--start", type=str, help="Override data start date/datetime (e.g. 2025-01-01)")
+    parser.add_argument("--end", type=str, help="Override data end date/datetime (e.g. 2026-01-01)")
     parser.add_argument("--tui", action="store_true", help="Force enable TUI")
     parser.add_argument("--no-tui", action="store_true", help="Force disable TUI")
     parser.add_argument("--fast", action="store_true", help="Fast mode: disable TUI/logs/journal I/O for max speed")
@@ -1118,8 +1176,26 @@ def main() -> None:
         if not data_path:
             raise ValueError("Missing data path. Set data.path in config.")
 
-        start = _parse_date(data_cfg.get("start") or cfg.get("start"))
-        end = _parse_date(data_cfg.get("end") or cfg.get("end"))
+        raw_start = args.start if args.start is not None else (data_cfg.get("start") or cfg.get("start"))
+        raw_end = args.end if args.end is not None else (data_cfg.get("end") or cfg.get("end"))
+        start = _parse_date(raw_start)
+        end = _parse_date(raw_end)
+        if start and end and start > end:
+            raise ValueError(f"Invalid range: start ({start}) is after end ({end})")
+
+        # Persist effective range into runtime config so journal/report show final values.
+        cfg.setdefault("data", {})
+        if isinstance(cfg.get("data"), dict):
+            cfg["data"]["start"] = (
+                args.start
+                if args.start is not None
+                else cfg["data"].get("start", cfg.get("start"))
+            )
+            cfg["data"]["end"] = (
+                args.end
+                if args.end is not None
+                else cfg["data"].get("end", cfg.get("end"))
+            )
         warmup = int(cfg.get("warmup", data_cfg.get("warmup", 200)))
 
         df = _load_data(str(data_path), start, end)
@@ -1242,6 +1318,8 @@ def main() -> None:
         else:
             result = runner.run()
 
+        if isinstance(result, dict):
+            result["run_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _print_result(result)
     except KeyboardInterrupt:
         status = "interrupted"
