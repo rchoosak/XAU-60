@@ -22,12 +22,20 @@ parameters:
   ob_lookback: 20           # 20
 
   # Trade Management
+  # risk_reward: 2.5          # Increase TP distance relative to SL
+  # trailing_stop: false
+  # trailing_pips: 20.0       # Backward-compatible fixed trailing distance
+  # trailing_start_pips: 0.0  # Start trailing only after this floating profit (pips)
+  # trailing_pips_wide: 200.0 # Stage 1: wider trailing distance
+  # tighten_after_profit_pips: 500.0  # Switch to tight trailing after profit reaches this level
+  # trailing_pips_tight: 80.0 # Stage 2: tighter trailing distance
+
   risk_reward: 2.5          # Increase TP distance relative to SL
   trailing_stop: false
-  trailing_pips: 20.0       # Backward-compatible fixed trailing distance
-  trailing_start_pips: 0.0  # Start trailing only after this floating profit (pips)
+  trailing_pips: 80.0       # Backward-compatible fixed trailing distance
+  trailing_start_pips: 100.0  # Start trailing only after this floating profit (pips)
   trailing_pips_wide: 200.0 # Stage 1: wider trailing distance
-  tighten_after_profit_pips: 500.0  # Switch to tight trailing after profit reaches this level
+  tighten_after_profit_pips: 500.0  # S switch to tight trailing after profit reaches this level
   trailing_pips_tight: 80.0 # Stage 2: tighter trailing distance
 
   # Trend Alignment Filter

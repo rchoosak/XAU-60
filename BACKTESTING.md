@@ -31,7 +31,14 @@ npm install -g dukascopy-node
 
 ```bash
 # ตัวอย่าง: ดาวน์โหลด XAUUSD ช่วงปี 2024-01-01 ถึง 2026-03-24
-dukascopy-node download \
+npx dukascopy-node download \
+  -i xauusd \
+  -from 2026-03-24 \
+  -to 2026-03-30 \
+  -t m1 \
+  -f csv
+
+npx dukascopy-node download \
   -i xauusd \
   -from 2024-01-01 \
   -to 2026-03-24 \
@@ -69,8 +76,8 @@ python3 scripts/csv_to_parquet.py --input <path_to_csv> --output <path_to_parque
 **ตัวอย่าง:**
 ```bash
 python3 scripts/csv_to_parquet.py \
-  --input data/download/xauusd-m5-bid-2020-01-01-2026-03-24.csv \
-  --output data/backtest-db/xauusd-m5-bid-2020-01-01-2026-03-24.parquet
+  --input download/xauusd-m1-bid-2026-03-24-2026-03-30.csv \
+  --output data/backtest-db/xauusd-m1-bid-2026-03-24-2026-03-30.parquet
 ```
 
 **คุณสมบัติของสคริปต์:**
