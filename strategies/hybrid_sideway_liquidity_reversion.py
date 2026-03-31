@@ -70,6 +70,10 @@ class HybridSidewayLiquidityReversion(StrategyBase):
         # Additional signal gates
         self.momentum_rsi_period = 14
         self.edge_model_adx_max = 22.0
+        self.edge_rsi_buy_max = 45.0
+        self.edge_rsi_sell_min = 55.0
+        self.scalp_rsi_buy_max = 45.0
+        self.scalp_rsi_sell_min = 55.0
         self.cooldown_bars = 2
         self.reentry_spacing_factor = 0.7
         self.max_signals_per_day = 24
@@ -173,6 +177,10 @@ class HybridSidewayLiquidityReversion(StrategyBase):
 
         self.momentum_rsi_period = int(params.get("momentum_rsi_period", self.momentum_rsi_period))
         self.edge_model_adx_max = float(params.get("edge_model_adx_max", self.edge_model_adx_max))
+        self.edge_rsi_buy_max = float(params.get("edge_rsi_buy_max", self.edge_rsi_buy_max))
+        self.edge_rsi_sell_min = float(params.get("edge_rsi_sell_min", self.edge_rsi_sell_min))
+        self.scalp_rsi_buy_max = float(params.get("scalp_rsi_buy_max", self.scalp_rsi_buy_max))
+        self.scalp_rsi_sell_min = float(params.get("scalp_rsi_sell_min", self.scalp_rsi_sell_min))
         self.cooldown_bars = max(1, int(params.get("cooldown_bars", self.cooldown_bars)))
         self.reentry_spacing_factor = max(0.0, float(params.get("reentry_spacing_factor", self.reentry_spacing_factor)))
         self.max_signals_per_day = max(1, int(params.get("max_signals_per_day", self.max_signals_per_day)))
@@ -287,7 +295,7 @@ class HybridSidewayLiquidityReversion(StrategyBase):
         self._update_breakout_state(symbol, current_bar_index, close, range_ctx)
         event_ctx = self._classify_events(symbol, current_bar_index, data, range_ctx, atr_fast)
 
-        signal, model = self._select_entry_model(symbol, data, range_ctx, event_ctx, adx)
+        signal, model = self._select_entry_model(symbol, data, range_ctx, event_ctx, adx, rsi)
         if signal is None or model is None:
             return None
 
@@ -502,6 +510,7 @@ class HybridSidewayLiquidityReversion(StrategyBase):
         range_ctx: Dict[str, Any],
         event_ctx: Dict[str, Any],
         adx: float,
+        rsi: float,
     ) -> Tuple[Optional[Signal], Optional[str]]:
         bull_shift = self._detect_micro_structure_shift(data, direction=Signal.BUY)
         bear_shift = self._detect_micro_structure_shift(data, direction=Signal.SELL)
@@ -524,6 +533,7 @@ class HybridSidewayLiquidityReversion(StrategyBase):
             and (event_ctx["rejection_lower"] or not self.edge_require_rejection)
             and not event_ctx["true_breakout_down"]
             and adx <= self.edge_model_adx_max
+            and rsi <= self.edge_rsi_buy_max
         ):
             return Signal.BUY, "edge_reversion"
         if (
@@ -531,6 +541,7 @@ class HybridSidewayLiquidityReversion(StrategyBase):
             and (event_ctx["rejection_upper"] or not self.edge_require_rejection)
             and not event_ctx["true_breakout_up"]
             and adx <= self.edge_model_adx_max
+            and rsi >= self.edge_rsi_sell_min
         ):
             return Signal.SELL, "edge_reversion"
 
@@ -541,9 +552,17 @@ class HybridSidewayLiquidityReversion(StrategyBase):
             min_scalp_dist = self._pips_to_price(symbol, self.internal_scalp_min_distance_pips)
             dist_to_mid = abs(event_ctx["close"] - range_ctx["midpoint"])
             if dist_to_mid >= min_scalp_dist:
-                if dev <= -self.internal_scalp_trigger_fraction and bull_shift:
+                if (
+                    dev <= -self.internal_scalp_trigger_fraction
+                    and bull_shift
+                    and rsi <= self.scalp_rsi_buy_max
+                ):
                     return Signal.BUY, "internal_scalp"
-                if dev >= self.internal_scalp_trigger_fraction and bear_shift:
+                if (
+                    dev >= self.internal_scalp_trigger_fraction
+                    and bear_shift
+                    and rsi >= self.scalp_rsi_sell_min
+                ):
                     return Signal.SELL, "internal_scalp"
 
         return None, None

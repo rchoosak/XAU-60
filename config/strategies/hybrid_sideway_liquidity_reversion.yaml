@@ -1,7 +1,7 @@
 name: Hybrid Sideway Liquidity Reversion
-version: 1.0.0-aggressive
-enabled: false
-description: "Aggressive profile: higher frequency, lower threshold, wider session"
+version: 1.1.0-conservative
+enabled: true
+description: "Conservative profile: tighter sideway/range gates with cleaner entry confirmation"
 symbols:
   - XAUUSD
 timeframe: M1
@@ -10,44 +10,48 @@ magic_number: 790901
 parameters:
   regime_atr_fast: 14
   regime_atr_slow: 100
-  regime_adx_max: 60.0
+  regime_adx_max: 28.0
   regime_ema_period: 50
   regime_slope_lookback: 12
-  regime_slope_max_atr: 2.0
+  regime_slope_max_atr: 0.45
   regime_overlap_lookback: 20
-  regime_overlap_min: 0.20
+  regime_overlap_min: 0.45
   regime_expansion_atr_multiple: 1.8
-  regime_expansion_ratio_max: 1.0
-  regime_score_min: 20.0
-  regime_filter_enabled: false
+  regime_expansion_ratio_max: 0.45
+  regime_score_min: 55.0
+  regime_filter_enabled: true
 
-  range_lookback: 60
-  range_min_width_pips: 40.0
-  range_max_width_pips: 2200.0
-  range_touch_tolerance_pips: 30.0
-  range_min_touches_per_side: 1
-  range_filter_enabled: false
-  edge_buffer_pips: 30.0
-  reclaim_buffer_pips: 4.0
+  range_lookback: 96
+  range_min_width_pips: 80.0
+  range_max_width_pips: 600.0
+  range_touch_tolerance_pips: 18.0
+  range_min_touches_per_side: 2
+  range_filter_enabled: true
+  edge_buffer_pips: 12.0
+  reclaim_buffer_pips: 8.0
 
-  sweep_depth_pips: 12.0
-  wick_ratio_min: 0.5
+  sweep_depth_pips: 16.0
+  wick_ratio_min: 1.2
   breakout_accept_buffer_pips: 10.0
-  breakout_accept_bars: 2
+  breakout_accept_bars: 3
   breakout_state_expire_bars: 6
-  failed_breakout_reentry_bars: 4
-  breakout_body_atr_min: 2.0
+  failed_breakout_reentry_bars: 3
+  breakout_body_atr_min: 0.8
 
-  allow_internal_scalp: true
-  edge_require_rejection: false
-  internal_scalp_trigger_fraction: 0.10
+  allow_internal_scalp: false
+  edge_require_rejection: true
+  internal_scalp_trigger_fraction: 0.28
   internal_scalp_min_distance_pips: 14.0
 
   momentum_rsi_period: 14
-  edge_model_adx_max: 40.0
-  cooldown_bars: 1
-  reentry_spacing_factor: 0.2
-  max_signals_per_day: 80
+  edge_model_adx_max: 22.0
+  edge_rsi_buy_max: 45.0
+  edge_rsi_sell_min: 55.0
+  scalp_rsi_buy_max: 45.0
+  scalp_rsi_sell_min: 55.0
+  cooldown_bars: 3
+  reentry_spacing_factor: 0.7
+  max_signals_per_day: 24
 
 risk:
   edge_stop_atr_mult: 0.9
@@ -61,14 +65,14 @@ risk:
   stop_loss_min_pips: 40.0
   stop_loss_max_pips: 400.0
   trailing_stop: true
-  trailing_start_pips: 60.0
-  trailing_pips: 70.0
-  max_risk_percent: 0.8
+  trailing_start_pips: 80.0
+  trailing_pips: 90.0
+  max_risk_percent: 0.4
   lot_size: 0
 
 session:
   use_time_filter: true
-  timezone: Asia/Bangkok
+  timezone: UTC
   data_timezone: UTC
   start_hour: 0
   end_hour: 23
@@ -78,7 +82,7 @@ execution_filters:
   enabled: true
   allow_long: true
   allow_short: true
-  blocked_hours: []
+  blocked_hours: [0, 2, 4, 5, 9, 20, 21, 23]
   blocked_weekdays: []
 
 decision_logging:
