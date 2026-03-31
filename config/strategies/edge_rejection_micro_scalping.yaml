@@ -1,5 +1,5 @@
 name: "Edge Rejection Micro Scalping"
-enabled: true
+enabled: false
 description: "Range-edge liquidity sweep rejection micro scalping for XAUUSD"
 symbols:
   - XAUUSD
