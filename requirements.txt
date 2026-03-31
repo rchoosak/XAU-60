@@ -5,6 +5,7 @@ MetaTrader5>=5.0.45; sys_platform == 'win32'
 
 # Data Processing
 pandas>=2.0.0
+pyarrow>=14.0.0  # Parquet engine for pandas read_parquet/to_parquet
 numpy>=1.24.0
 ta>=0.10.2  # Technical Analysis library
 pytz>=2023.3  # Timezone handling

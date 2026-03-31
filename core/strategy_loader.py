@@ -6,6 +6,7 @@ import os
 import sys
 import importlib
 import importlib.util
+import locale
 from pathlib import Path
 from typing import Dict, List, Type, Optional, Any
 import yaml
@@ -39,6 +40,34 @@ class StrategyLoader:
         self._strategies: Dict[str, StrategyBase] = {}
         self._strategy_classes: Dict[str, Type[StrategyBase]] = {}
         self._configs: Dict[str, Dict[str, Any]] = {}
+
+    @staticmethod
+    def _load_yaml_file(config_file: Path) -> Dict[str, Any]:
+        """
+        Load YAML with resilient encoding handling across platforms.
+        """
+        encodings = ["utf-8-sig", "utf-8"]
+        preferred = locale.getpreferredencoding(False)
+        if preferred and preferred.lower() not in {e.lower() for e in encodings}:
+            encodings.append(preferred)
+        for fallback in ("cp1252", "cp874", "latin-1"):
+            if fallback.lower() not in {e.lower() for e in encodings}:
+                encodings.append(fallback)
+
+        last_error: Optional[Exception] = None
+        for encoding in encodings:
+            try:
+                with open(config_file, "r", encoding=encoding) as f:
+                    return yaml.safe_load(f) or {}
+            except UnicodeDecodeError as e:
+                last_error = e
+                continue
+
+        if last_error:
+            raise last_error
+        # Defensive fallback; should not happen.
+        with open(config_file, "r") as f:
+            return yaml.safe_load(f) or {}
 
     def discover_strategies(self) -> List[str]:
         """
@@ -111,11 +140,10 @@ class StrategyLoader:
             config_file = self.config_dir / f"{name}.yaml"
             if config_file.exists():
                 try:
-                    with open(config_file, "r") as f:
-                        config = yaml.safe_load(f)
-                        self._configs[strategy_name] = config
-                        logger.info(f"Loaded config for {strategy_name}")
-                        return config
+                    config = self._load_yaml_file(config_file)
+                    self._configs[strategy_name] = config
+                    logger.info(f"Loaded config for {strategy_name}")
+                    return config
                 except Exception as e:
                     logger.error(f"Failed to load config {config_file}: {e}")
 
@@ -247,7 +275,7 @@ class StrategyLoader:
         config_file = self.config_dir / f"{strategy_name.lower().replace(' ', '_')}.yaml"
 
         try:
-            with open(config_file, "w") as f:
+            with open(config_file, "w", encoding="utf-8") as f:
                 yaml.dump(config, f, default_flow_style=False)
 
             self._configs[strategy_name] = config
