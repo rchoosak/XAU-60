@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import threading
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, Dict, List, Tuple
@@ -1237,8 +1238,23 @@ def main():
 
     args = parser.parse_args()
 
-    if args.ui_with_bot:
+    def _run_streamlit_ui() -> None:
         import subprocess
+
+        streamlit_bin = shutil.which("streamlit")
+        if streamlit_bin:
+            subprocess.run([streamlit_bin, "run", "ui/app.py"])
+            return
+
+        try:
+            subprocess.run([sys.executable, "-m", "streamlit", "run", "ui/app.py"], check=True)
+        except subprocess.CalledProcessError:
+            print(
+                "[ERROR] Streamlit is not available in this Python environment.\n"
+                "Install dependencies first, e.g. `python3 -m pip install -r requirements.txt`."
+            )
+
+    if args.ui_with_bot:
         print(
             "[INFO] Starting live bot + UI mode. "
             "Orders can be executed while dashboard is open."
@@ -1247,7 +1263,7 @@ def main():
         bot_thread = threading.Thread(target=bot.run, name="TradingBotThread", daemon=True)
         bot_thread.start()
         try:
-            subprocess.run(["streamlit", "run", "ui/app.py"])
+            _run_streamlit_ui()
         finally:
             bot.running = False
             if bot_thread.is_alive():
@@ -1256,12 +1272,11 @@ def main():
 
     if args.ui:
         # Launch Streamlit UI
-        import subprocess
         print(
             "[INFO] UI mode launches dashboard only. "
             "Run `python main.py` in another terminal, or use `python main.py --ui-with-bot`."
         )
-        subprocess.run(["streamlit", "run", "ui/app.py"])
+        _run_streamlit_ui()
         return
 
     bot = TradingBot(args.config)
