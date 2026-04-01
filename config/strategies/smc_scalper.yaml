@@ -1,7 +1,7 @@
 # SMC Scalper Strategy Configuration
 
 name: "SMC Scalper"
-enabled: false
+enabled: true
 description: "Smart Money Concepts scalping with trend-aligned short filter and session risk controls"
 
 symbols:

@@ -1,6 +1,6 @@
 name: "MACD Scalper"
 version: "1.1.0"
-enabled: true
+enabled: false
 description: "Balanced MACD scalper for sideway markets with safety halt gate"
 
 symbols:
