@@ -729,6 +729,7 @@ class LiveLikeBotBacktester:
         for rec in new_records:
             reason = self._close_reason_by_ticket.pop(rec.ticket, "Close")
             event = {
+                "ticket": rec.ticket,
                 "entry_time": rec.open_time,
                 "exit_time": rec.close_time,
                 "signal": rec.signal.name,

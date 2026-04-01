@@ -59,16 +59,19 @@ class ActiveOrder:
     sl: float
     tp: float
     pnl: float
+    open_time: Optional[datetime] = None
 
 
 @dataclass
 class ClosedOrder:
     ticket: int
+    strategy: str
     side: str
     lots: float
     entry: float
     exit: float
     profit: float
+    open_time: datetime
     close_time: datetime
     reason: str
 
@@ -299,6 +302,7 @@ class MockBacktestFeed:
             sl=sl,
             tp=tp,
             pnl=0.0,
+            open_time=self._current_time,
         )
 
     def _step_orders(self) -> None:
@@ -327,11 +331,13 @@ class MockBacktestFeed:
                 self._history.appendleft(
                     ClosedOrder(
                         ticket=o.ticket,
+                        strategy="Mock Strategy",
                         side=o.side,
                         lots=o.lots,
                         entry=o.entry,
                         exit=self._price,
                         profit=pnl,
+                        open_time=o.open_time or self._current_time,
                         close_time=self._current_time,
                         reason=reason,
                     )
@@ -600,11 +606,13 @@ class RealBacktestFeed:
             history.append(
                 ClosedOrder(
                     ticket=ticket,
+                    strategy=str(rec.get("strategy", "")) or "Unknown",
                     side=signal,
                     lots=_to_float(rec.get("lot_size"), 0.0),
                     entry=_to_float(rec.get("entry_price"), 0.0),
                     exit=_to_float(rec.get("exit_price"), 0.0),
                     profit=_to_float(rec.get("profit"), 0.0),
+                    open_time=_to_dt(rec.get("entry_time"), close_time),
                     close_time=close_time,
                     reason=str(rec.get("reason", "")),
                 )
@@ -829,11 +837,13 @@ def build_active_orders_table(orders: Sequence[ActiveOrder], max_rows: int) -> T
 def build_order_history_table(history: Sequence[ClosedOrder], max_rows: int) -> Table:
     table = Table(box=box.SIMPLE_HEAVY, expand=True, show_lines=False)
     table.add_column("TICKET", justify="right", style="cyan", no_wrap=True)
+    table.add_column("STRATEGY", justify="left")
     table.add_column("TYPE", justify="center", no_wrap=True)
     table.add_column("LOTS", justify="right")
     table.add_column("ENTRY", justify="right")
     table.add_column("EXIT", justify="right")
     table.add_column("PROFIT", justify="right")
+    table.add_column("OPEN TIME", justify="left", no_wrap=True)
     table.add_column("CLOSE TIME", justify="left", no_wrap=True)
     table.add_column("REASON", justify="left")
 
@@ -842,17 +852,19 @@ def build_order_history_table(history: Sequence[ClosedOrder], max_rows: int) -> 
         side_style = "green" if o.side == "BUY" else "red"
         table.add_row(
             str(o.ticket),
+            o.strategy,
             f"[{side_style}]{o.side}[/{side_style}]",
             f"{o.lots:.2f}",
             f"{o.entry:.2f}",
             f"{o.exit:.2f}",
             f"[{pnl_style}]{o.profit:+.2f}[/{pnl_style}]",
+            o.open_time.strftime("%Y-%m-%d %H:%M:%S"),
             o.close_time.strftime("%Y-%m-%d %H:%M:%S"),
             o.reason,
         )
 
     if not history:
-        table.add_row("-", "-", "-", "-", "-", "-", "-", "-")
+        table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "-", "-")
 
     return table
 
