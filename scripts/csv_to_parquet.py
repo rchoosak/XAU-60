@@ -32,6 +32,45 @@ def detect_timeframe(df: pd.DataFrame) -> int:
     diffs = df['time'].diff().dropna().dt.total_seconds().astype(int)
     return int(diffs.mode()[0])
 
+
+def _coerce_numeric_column(df: pd.DataFrame, col: str) -> int:
+    """Convert a column to numeric and return number of invalid values coerced to NaN."""
+    if col not in df.columns:
+        return 0
+    before_na = int(df[col].isna().sum()) if df[col].isna().any() else 0
+    s = df[col]
+
+    if s.dtype == "object":
+        cleaned = s.astype(str).str.strip()
+        cleaned = cleaned.str.strip('"').str.strip("'")
+        cleaned = cleaned.mask(cleaned.str.lower() == col.lower())
+        cleaned = cleaned.mask(cleaned.str.lower().isin({"", "none", "null", "nan"}))
+        cleaned = cleaned.str.replace(",", "", regex=False)
+        df[col] = pd.to_numeric(cleaned, errors="coerce")
+    else:
+        df[col] = pd.to_numeric(s, errors="coerce")
+
+    after_na = int(df[col].isna().sum()) if df[col].isna().any() else 0
+    return max(0, after_na - before_na)
+
+
+def _normalize_ohlcv_types(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize OHLCV-like columns to numeric and drop broken rows."""
+    numeric_cols = [c for c in ["open", "high", "low", "close", "tick_volume", "volume", "real_volume", "spread"] if c in df.columns]
+    for col in numeric_cols:
+        newly_invalid = _coerce_numeric_column(df, col)
+        if newly_invalid > 0:
+            logger.warning(f"Column '{col}': coerced {newly_invalid} invalid values to NaN")
+
+    required = [c for c in ["open", "high", "low", "close"] if c in df.columns]
+    if required:
+        before = len(df)
+        df = df.dropna(subset=required)
+        dropped = before - len(df)
+        if dropped > 0:
+            logger.warning(f"Dropped {dropped} rows with invalid OHLC values")
+    return df
+
 def convert_csv_to_parquet(csv_file: str, output_file: str):
     """Convert MT5 exported CSV to Parquet for backtesting."""
     if not os.path.exists(csv_file):
@@ -80,6 +119,9 @@ def convert_csv_to_parquet(csv_file: str, output_file: str):
             logger.error("CSV must contain a 'time' or 'timestamp' column.")
             return False
 
+        # Normalize OHLCV dtypes early for CSV payload
+        df = _normalize_ohlcv_types(df)
+
         # Detect timeframe for new data
         new_tf = detect_timeframe(df)
         logger.info(f"Detected timeframe for new data: {new_tf}s")
@@ -89,6 +131,10 @@ def convert_csv_to_parquet(csv_file: str, output_file: str):
             try:
                 existing_df = pd.read_parquet(output_file)
                 if not existing_df.empty:
+                    if 'time' in existing_df.columns:
+                        existing_df['time'] = pd.to_datetime(existing_df['time'], errors='coerce')
+                        existing_df = existing_df.dropna(subset=['time'])
+                    existing_df = _normalize_ohlcv_types(existing_df)
                     # Detect timeframe for existing data
                     existing_df = existing_df.sort_values('time')
                     existing_tf = detect_timeframe(existing_df)
@@ -107,6 +153,9 @@ def convert_csv_to_parquet(csv_file: str, output_file: str):
                 df = df.drop_duplicates(subset=['time'], keep='last').sort_values('time')
         else:
             df = df.drop_duplicates(subset=['time'], keep='last').sort_values('time')
+
+        # Final type safety pass after merge
+        df = _normalize_ohlcv_types(df)
 
         final_len = len(df)
         logger.info(f"Total rows after merge and deduplication: {final_len}")
