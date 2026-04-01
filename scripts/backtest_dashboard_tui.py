@@ -6,6 +6,8 @@ Optimized for 244x66 terminal, but adaptive to any terminal size.
 Controls:
 - SPACE: Toggle RUNNING / PAUSED
 - R: Reload config and restart backtest
+- J / K: Scroll ORDER HISTORY down/up
+- PgUp / PgDn: Fast scroll ORDER HISTORY
 - Q: Quit
 """
 
@@ -181,6 +183,10 @@ class KeyPoller:
                             return "UP"
                         if ext == "P":
                             return "DOWN"
+                        if ext == "I":
+                            return "PGUP"
+                        if ext == "Q":
+                            return "PGDN"
                         return ext
                     return None
                 return ch
@@ -192,7 +198,7 @@ class KeyPoller:
             if ch != "\x1b":
                 return ch
             seq = ""
-            for _ in range(2):
+            for _ in range(5):
                 dr2, _, _ = select.select([sys.stdin], [], [], 0)
                 if dr2:
                     seq += sys.stdin.read(1)
@@ -202,6 +208,10 @@ class KeyPoller:
                 return "UP"
             if seq == "[B":
                 return "DOWN"
+            if seq == "[5~":
+                return "PGUP"
+            if seq == "[6~":
+                return "PGDN"
             return ch
         return None
 
@@ -362,6 +372,8 @@ class MockBacktestFeed:
         wr = (wins / total * 100.0) if total > 0 else 0.0
 
         floating = self._equity - self._balance
+        net_profit = self._balance - self._initial_balance
+        net_profit_pct = (net_profit / self._initial_balance * 100.0) if self._initial_balance > 0 else 0.0
         account = {
             "Balance": f"$ {self._balance:,.2f}",
             "Equity": f"$ {self._equity:,.2f}",
@@ -369,7 +381,8 @@ class MockBacktestFeed:
             "Max Drawdown": f"{self._max_dd:.2f} %",
             "Profit Factor": f"{pf:.2f}",
             "Win Rate": f"{wr:.1f} %",
-            "Total Net Pf": f"$ {self._balance - self._initial_balance:,.2f}",
+            "Net Profit": f"$ {net_profit:,.2f}",
+            "Net Profit (%)": f"{net_profit_pct:+.2f} %",
             "Gross Profit": f"$ {gross_profit:,.2f}",
             "Gross Loss": f"$ {gross_loss:,.2f}",
         }
@@ -538,6 +551,7 @@ class RealBacktestFeed:
         gross_profit = sum(float(t.get("profit", 0.0)) for t in wins)
         gross_loss = sum(float(t.get("profit", 0.0)) for t in losses)
         net_profit = float(runner.balance - runner.initial_balance)
+        net_profit_pct = (net_profit / runner.initial_balance * 100.0) if runner.initial_balance > 0 else 0.0
         pf = (gross_profit / abs(gross_loss)) if gross_loss < 0 else 0.0
         wr = (len(wins) / len(trades) * 100.0) if trades else 0.0
         expectancy = (net_profit / len(trades)) if trades else 0.0
@@ -550,7 +564,8 @@ class RealBacktestFeed:
             "Max Drawdown": f"{max_dd:.2f} %",
             "Profit Factor": f"{pf:.2f}",
             "Win Rate": f"{wr:.1f} %",
-            "Total Net Pf": f"$ {net_profit:,.2f}",
+            "Net Profit": f"$ {net_profit:,.2f}",
+            "Net Profit (%)": f"{net_profit_pct:+.2f} %",
             "Gross Profit": f"$ {gross_profit:,.2f}",
             "Gross Loss": f"$ {gross_loss:,.2f}",
             "Expectancy": f"$ {expectancy:,.2f}",
@@ -994,6 +1009,7 @@ class BacktestDashboardTUI:
         self.speed_min = 1
         self.speed_max = 100
         self.speed_multiplier = max(self.speed_min, min(self.speed_max, int(initial_speed)))
+        self.history_scroll = 0
         self.log_messages: Deque[str] = deque(maxlen=300)
         self.last_logged_bar_time: Optional[datetime] = None
         self.add_log("Dashboard initialized")
@@ -1010,6 +1026,7 @@ class BacktestDashboardTUI:
             self.feed = self.feed_builder()
             self.running = True
             self.feed.set_running(True)
+            self.history_scroll = 0
             stamp = datetime.now().strftime("%H:%M:%S")
             self.last_notice = f"Restarted + reloaded config at {stamp}"
             self.last_logged_bar_time = None
@@ -1031,6 +1048,16 @@ class BacktestDashboardTUI:
         if self.speed_multiplier != old:
             self.last_notice = f"Speed set to {self.speed_multiplier}x"
             self.add_log(self.last_notice)
+
+    def _scroll_history(self, delta: int) -> None:
+        old = self.history_scroll
+        self.history_scroll = max(0, self.history_scroll + int(delta))
+        if self.history_scroll != old:
+            self.last_notice = f"History scroll: {self.history_scroll}"
+
+    def _scroll_history_page(self, direction: int) -> None:
+        step = 12 if direction > 0 else -12
+        self._scroll_history(step)
 
     def _build_layout(self, state: DashboardState) -> Layout:
         term_w = self.console.size.width
@@ -1142,7 +1169,7 @@ class BacktestDashboardTUI:
                 active_table,
                 title="[ACTIVE ORDERS & GRID STATUS]",
                 subtitle=(
-                    f"[CONTROLS] [SPACE] Pause/Run  [↑/↓] Speed  [R] Restart  [Q] Quit | "
+                    f"[CONTROLS] [SPACE] Pause/Run  [↑/↓] Speed  [J/K] History Scroll  [PgUp/PgDn] Fast Scroll  [R] Restart  [Q] Quit | "
                     f"{self.last_notice} | build={TUI_BUILD}"
                 ),
                 subtitle_align="left",
@@ -1161,9 +1188,29 @@ class BacktestDashboardTUI:
 
         # Order history (right bottom 50%)
         history_max_rows = max(1, right_bottom_h - 6)
-        history_table = build_order_history_table(state.order_history, history_max_rows)
+        history_all = list(state.order_history)
+        history_total = len(history_all)
+        max_offset = max(0, history_total - history_max_rows)
+        self.history_scroll = min(max(0, self.history_scroll), max_offset)
+        visible_history = history_all[self.history_scroll:self.history_scroll + history_max_rows]
+
+        if history_total > 0:
+            row_start = self.history_scroll + 1
+            row_end = min(history_total, self.history_scroll + len(visible_history))
+            history_pos = f"rows {row_start}-{row_end}/{history_total}"
+        else:
+            history_pos = "rows 0/0"
+
+        history_table = build_order_history_table(visible_history, history_max_rows)
         root["right"]["history"].update(
-            Panel(history_table, title="[ORDER HISTORY (CLOSED)]", padding=(0, 1), box=box.ROUNDED)
+            Panel(
+                history_table,
+                title="[ORDER HISTORY (CLOSED)]",
+                subtitle=f"[J/K] Scroll  [PgUp/PgDn] Fast  |  {history_pos}",
+                subtitle_align="left",
+                padding=(0, 1),
+                box=box.ROUNDED,
+            )
         )
 
         return root
@@ -1185,12 +1232,20 @@ class BacktestDashboardTUI:
                             self.increase_speed()
                         elif key == "DOWN":
                             self.decrease_speed()
+                        elif key == "PGUP":
+                            self._scroll_history_page(-1)
+                        elif key == "PGDN":
+                            self._scroll_history_page(1)
                         else:
                             k = key.lower()
                             if k == "q":
                                 self.add_log("Quit requested")
                                 self.should_quit = True
                                 break
+                            if k == "k":
+                                self._scroll_history(-1)
+                            elif k == "j":
+                                self._scroll_history(1)
                             if key == " ":
                                 self.running = not self.running
                                 self.feed.set_running(self.running)
