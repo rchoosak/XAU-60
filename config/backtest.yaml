@@ -12,9 +12,9 @@ journal:
   reset_on_start: false
 
 data:
-  path: data/backtest-db/xauusd-m1-bid-2020-01-01-2026-03-24.parquet
-  start: "2026-03-24"
-  end: "2026-03-30"
+  path: data/backtest-db/xauusd-m1-bid-2010-01-01-2026-04-01.parquet
+  start: "2026-01-01"
+  end: "2026-04-01"
 
 # Optional override strategy selection.
 # If omitted, runner uses each strategy's `enabled` flag from config/strategies/*.yaml.
