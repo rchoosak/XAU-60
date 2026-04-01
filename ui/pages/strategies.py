@@ -4,10 +4,44 @@ Strategies Page - Manage trading strategies.
 import streamlit as st
 import pandas as pd
 import yaml
+import locale
 from pathlib import Path
+from typing import Optional
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+
+def _load_yaml_file(path: Path) -> dict:
+    """Load YAML with cross-platform encoding fallbacks."""
+    encodings = ["utf-8-sig", "utf-8"]
+    preferred = locale.getpreferredencoding(False)
+    if preferred and preferred.lower() not in {e.lower() for e in encodings}:
+        encodings.append(preferred)
+    for fallback in ("cp1252", "cp874", "latin-1"):
+        if fallback.lower() not in {e.lower() for e in encodings}:
+            encodings.append(fallback)
+
+    last_error: Optional[Exception] = None
+    for encoding in encodings:
+        try:
+            with open(path, "r", encoding=encoding) as f:
+                return yaml.safe_load(f) or {}
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+
+    if last_error:
+        raise last_error
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _save_yaml_file(path: Path, payload: dict) -> None:
+    """Persist YAML in UTF-8 so all platforms can read it consistently."""
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(payload, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def render_strategies():
@@ -38,12 +72,11 @@ def render_active_strategies():
     if config_dir.exists():
         for config_file in config_dir.glob("*.yaml"):
             try:
-                with open(config_file, "r") as f:
-                    config = yaml.safe_load(f)
-                    strategies.append({
-                        "file": config_file.name,
-                        **config
-                    })
+                config = _load_yaml_file(config_file)
+                strategies.append({
+                    "file": config_file.name,
+                    **config
+                })
             except Exception as e:
                 st.error(f"Error loading {config_file.name}: {e}")
 
@@ -97,8 +130,7 @@ def render_strategy_config():
 
     if selected_file:
         try:
-            with open(selected_file, "r") as f:
-                config = yaml.safe_load(f)
+            config = _load_yaml_file(selected_file)
 
             st.markdown("---")
 
@@ -161,8 +193,7 @@ def render_strategy_config():
                 config['magic_number'] = int(new_magic)
                 config['parameters'] = new_params
 
-                with open(selected_file, "w") as f:
-                    yaml.dump(config, f, default_flow_style=False)
+                _save_yaml_file(selected_file, config)
 
                 st.success("Configuration saved!")
                 st.rerun()
@@ -253,8 +284,7 @@ class MyStrategy(StrategyBase):
             config_dir.mkdir(parents=True, exist_ok=True)
 
             config_path = config_dir / f"{new_file}.yaml"
-            with open(config_path, "w") as f:
-                yaml.dump(config, f, default_flow_style=False)
+            _save_yaml_file(config_path, config)
 
             st.success(f"Created {config_path}")
             st.info(f"Now create `strategies/{new_file}.py` with your strategy implementation.")
@@ -263,13 +293,11 @@ class MyStrategy(StrategyBase):
 def toggle_strategy(config_path: Path, enabled: bool):
     """Toggle strategy enabled/disabled."""
     try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
+        config = _load_yaml_file(config_path)
 
         config['enabled'] = enabled
 
-        with open(config_path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False)
+        _save_yaml_file(config_path, config)
 
     except Exception as e:
         st.error(f"Error toggling strategy: {e}")

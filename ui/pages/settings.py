@@ -3,10 +3,43 @@ Settings Page - Bot configuration.
 """
 import streamlit as st
 import yaml
+import locale
 from pathlib import Path
+from typing import Optional
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+
+def _load_yaml_file(path: Path) -> dict:
+    """Load YAML with resilient encoding handling for Windows/macOS/Linux."""
+    encodings = ["utf-8-sig", "utf-8"]
+    preferred = locale.getpreferredencoding(False)
+    if preferred and preferred.lower() not in {e.lower() for e in encodings}:
+        encodings.append(preferred)
+    for fallback in ("cp1252", "cp874", "latin-1"):
+        if fallback.lower() not in {e.lower() for e in encodings}:
+            encodings.append(fallback)
+
+    last_error: Optional[Exception] = None
+    for encoding in encodings:
+        try:
+            with open(path, "r", encoding=encoding) as f:
+                return yaml.safe_load(f) or {}
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+
+    if last_error:
+        raise last_error
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _save_yaml_file(path: Path, payload: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(payload, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def _as_int(value, default: int) -> int:
@@ -37,8 +70,7 @@ def render_settings():
     settings_path = Path(__file__).parent.parent.parent / "config" / "settings.yaml"
 
     try:
-        with open(settings_path, "r") as f:
-            settings = yaml.safe_load(f)
+        settings = _load_yaml_file(settings_path)
     except Exception:
         settings = {}
         st.warning("Could not load settings. Using defaults.")
@@ -376,7 +408,6 @@ def save_settings(settings_path: Path, settings: dict):
     """Save settings to file."""
     try:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, "w") as f:
-            yaml.dump(settings, f, default_flow_style=False)
+        _save_yaml_file(settings_path, settings)
     except Exception as e:
         st.error(f"Failed to save settings: {e}")
