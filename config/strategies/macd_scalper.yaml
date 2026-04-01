@@ -1,0 +1,81 @@
+name: "MACD Scalper"
+version: "1.1.0"
+enabled: true
+description: "Balanced MACD scalper for sideway markets with safety halt gate"
+
+symbols:
+  - XAUUSD
+
+timeframe: M1
+magic_number: 792100
+
+parameters:
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  min_hist_abs: 0.04
+  require_hist_acceleration: true
+  require_cross_over_zero: false
+
+  use_ema_filter: true
+  ema_filter_period: 50
+  max_spread_points: 40.0
+  atr_period: 14
+  max_signals_per_day: 90
+
+  # Balanced Sideway Regime Filter
+  sideway_mode_enabled: true
+  sideway_adx_period: 14
+  sideway_adx_max: 22.0
+  sideway_ema_slope_lookback: 8
+  sideway_ema_slope_max_pips: 18.0
+  sideway_range_lookback: 36
+  sideway_min_range_pips: 40.0
+  sideway_max_range_pips: 280.0
+  sideway_min_atr_pips: 6.0
+  sideway_max_atr_pips: 55.0
+
+  # Safety: halt entries when regime breaks / after loss streak
+  safety_halt_on_regime_break: true
+  safety_resume_confirm_bars: 4
+  safety_halt_after_consecutive_losses: 3
+  safety_loss_halt_bars: 25
+  pre_sl_exit_enabled: true
+  pre_sl_min_bars_in_trade: 1
+  pre_sl_loss_ratio: 0.54
+  pre_sl_fast_loss_ratio: 0.32
+  pre_sl_hard_loss_ratio: 0.68
+  pre_sl_hist_flip_abs: 0.03
+  pre_sl_hist_flat_abs: 0.01
+  pre_sl_price_buffer_pips: 8.0
+
+risk:
+  lot_size: 0.01
+  atr_stop_mult: 1.0
+  atr_target_mult: 1.3
+  min_stop_pips: 30.0
+  max_stop_pips: 180.0
+  risk_reward: 1.4
+  max_bars_in_trade: 20
+  cooldown_bars: 1
+  trailing_stop: false
+  trailing_start_pips: 0.0
+  trailing_pips: 30.0
+
+session:
+  use_time_filter: true
+  timezone: UTC
+  data_timezone: UTC
+  start_hour: 6
+  end_hour: 23
+  trade_friday: true
+
+execution_filters:
+  enabled: true
+  allow_long: true
+  allow_short: true
+  blocked_hours: []
+  blocked_weekdays: []
+
+diagnostics:
+  enabled: false
