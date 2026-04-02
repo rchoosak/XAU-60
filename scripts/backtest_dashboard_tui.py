@@ -6,8 +6,7 @@ Optimized for 244x66 terminal, but adaptive to any terminal size.
 Controls:
 - SPACE: Toggle RUNNING / PAUSED
 - R: Reload config and restart backtest
-- J / K: Scroll ORDER HISTORY down/up
-- PgUp / PgDn: Fast scroll ORDER HISTORY
+- LEFT / RIGHT: Previous / Next ORDER HISTORY page
 - Q: Quit
 """
 
@@ -183,6 +182,10 @@ class KeyPoller:
                             return "UP"
                         if ext == "P":
                             return "DOWN"
+                        if ext == "K":
+                            return "LEFT"
+                        if ext == "M":
+                            return "RIGHT"
                         if ext == "I":
                             return "PGUP"
                         if ext == "Q":
@@ -208,6 +211,10 @@ class KeyPoller:
                 return "UP"
             if seq == "[B":
                 return "DOWN"
+            if seq == "[D":
+                return "LEFT"
+            if seq == "[C":
+                return "RIGHT"
             if seq == "[5~":
                 return "PGUP"
             if seq == "[6~":
@@ -1009,7 +1016,7 @@ class BacktestDashboardTUI:
         self.speed_min = 1
         self.speed_max = 100
         self.speed_multiplier = max(self.speed_min, min(self.speed_max, int(initial_speed)))
-        self.history_scroll = 0
+        self.history_page = 0
         self.log_messages: Deque[str] = deque(maxlen=300)
         self.last_logged_bar_time: Optional[datetime] = None
         self.add_log("Dashboard initialized")
@@ -1026,7 +1033,7 @@ class BacktestDashboardTUI:
             self.feed = self.feed_builder()
             self.running = True
             self.feed.set_running(True)
-            self.history_scroll = 0
+            self.history_page = 0
             stamp = datetime.now().strftime("%H:%M:%S")
             self.last_notice = f"Restarted + reloaded config at {stamp}"
             self.last_logged_bar_time = None
@@ -1049,15 +1056,17 @@ class BacktestDashboardTUI:
             self.last_notice = f"Speed set to {self.speed_multiplier}x"
             self.add_log(self.last_notice)
 
-    def _scroll_history(self, delta: int) -> None:
-        old = self.history_scroll
-        self.history_scroll = max(0, self.history_scroll + int(delta))
-        if self.history_scroll != old:
-            self.last_notice = f"History scroll: {self.history_scroll}"
+    def _history_prev_page(self) -> None:
+        old = self.history_page
+        self.history_page = max(0, self.history_page - 1)
+        if self.history_page != old:
+            self.last_notice = "History page: previous"
 
-    def _scroll_history_page(self, direction: int) -> None:
-        step = 12 if direction > 0 else -12
-        self._scroll_history(step)
+    def _history_next_page(self) -> None:
+        old = self.history_page
+        self.history_page += 1
+        if self.history_page != old:
+            self.last_notice = "History page: next"
 
     def _build_layout(self, state: DashboardState) -> Layout:
         term_w = self.console.size.width
@@ -1169,7 +1178,7 @@ class BacktestDashboardTUI:
                 active_table,
                 title="[ACTIVE ORDERS & GRID STATUS]",
                 subtitle=(
-                    f"[CONTROLS] [SPACE] Pause/Run  [↑/↓] Speed  [J/K] History Scroll  [PgUp/PgDn] Fast Scroll  [R] Restart  [Q] Quit | "
+                    f"[CONTROLS] [SPACE] Pause/Run  [↑/↓] Speed  [←/→] History Page  [R] Restart  [Q] Quit | "
                     f"{self.last_notice} | build={TUI_BUILD}"
                 ),
                 subtitle_align="left",
@@ -1190,23 +1199,24 @@ class BacktestDashboardTUI:
         history_max_rows = max(1, right_bottom_h - 6)
         history_all = list(state.order_history)
         history_total = len(history_all)
-        max_offset = max(0, history_total - history_max_rows)
-        self.history_scroll = min(max(0, self.history_scroll), max_offset)
-        visible_history = history_all[self.history_scroll:self.history_scroll + history_max_rows]
+        total_pages = max(1, (history_total + history_max_rows - 1) // history_max_rows)
+        self.history_page = min(max(0, self.history_page), total_pages - 1)
+        page_start = self.history_page * history_max_rows
+        visible_history = history_all[page_start:page_start + history_max_rows]
 
         if history_total > 0:
-            row_start = self.history_scroll + 1
-            row_end = min(history_total, self.history_scroll + len(visible_history))
-            history_pos = f"rows {row_start}-{row_end}/{history_total}"
+            row_start = page_start + 1
+            row_end = min(history_total, page_start + len(visible_history))
+            history_pos = f"page {self.history_page + 1}/{total_pages} | rows {row_start}-{row_end}/{history_total}"
         else:
-            history_pos = "rows 0/0"
+            history_pos = "page 1/1 | rows 0/0"
 
         history_table = build_order_history_table(visible_history, history_max_rows)
         root["right"]["history"].update(
             Panel(
                 history_table,
                 title="[ORDER HISTORY (CLOSED)]",
-                subtitle=f"[J/K] Scroll  [PgUp/PgDn] Fast  |  {history_pos}",
+                subtitle=f"[←/→] Prev/Next Page  |  {history_pos}",
                 subtitle_align="left",
                 padding=(0, 1),
                 box=box.ROUNDED,
@@ -1232,20 +1242,16 @@ class BacktestDashboardTUI:
                             self.increase_speed()
                         elif key == "DOWN":
                             self.decrease_speed()
-                        elif key == "PGUP":
-                            self._scroll_history_page(-1)
-                        elif key == "PGDN":
-                            self._scroll_history_page(1)
+                        elif key == "LEFT":
+                            self._history_prev_page()
+                        elif key == "RIGHT":
+                            self._history_next_page()
                         else:
                             k = key.lower()
                             if k == "q":
                                 self.add_log("Quit requested")
                                 self.should_quit = True
                                 break
-                            if k == "k":
-                                self._scroll_history(-1)
-                            elif k == "j":
-                                self._scroll_history(1)
                             if key == " ":
                                 self.running = not self.running
                                 self.feed.set_running(self.running)
