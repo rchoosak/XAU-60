@@ -46,6 +46,16 @@ parameters:
   require_trend_for_buy: false
   require_trend_for_sell: true
 
+  # Early Exit on Strategy Change (close before SL when thesis invalidates)
+  early_exit_on_strategy_change: false
+  early_exit_min_bars_in_trade: 1
+  early_exit_only_when_adverse: false
+  early_exit_loss_ratio: 0.70        # close when loss reaches 30% of SL distance
+  early_exit_near_sl_ratio: 0.30     # fallback threshold near SL
+  early_exit_on_opposite_choch: false
+  early_exit_on_trend_flip: false
+  early_exit_on_session_invalid: false
+
   # Stop Loss
   use_atr_sl: false         # ATR SL on M1 was too tight in live
   atr_period: 14

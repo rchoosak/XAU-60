@@ -54,6 +54,14 @@ class SMCScalper(StrategyBase):
         self.trend_min_slope_pips = 0.0
         self.require_trend_for_buy = True
         self.require_trend_for_sell = True
+        self.early_exit_on_strategy_change = True
+        self.early_exit_min_bars_in_trade = 1
+        self.early_exit_only_when_adverse = True
+        self.early_exit_loss_ratio = 0.30
+        self.early_exit_near_sl_ratio = 0.70
+        self.early_exit_on_opposite_choch = True
+        self.early_exit_on_trend_flip = True
+        self.early_exit_on_session_invalid = False
 
         # Session filter
         self.use_time_filter = True
@@ -70,6 +78,8 @@ class SMCScalper(StrategyBase):
         self._debug_eval_count: Dict[str, int] = {}
         self._debug_last_marker: Dict[str, str] = {}
         self._debug_last_ts: Dict[str, pd.Timestamp] = {}
+        self._bar_counter: Dict[str, int] = {}
+        self._open_bar_by_ticket: Dict[int, int] = {}
 
     def initialize(self, config: Dict[str, Any]) -> None:
         """Initialize strategy with configuration."""
@@ -97,6 +107,14 @@ class SMCScalper(StrategyBase):
         self.trend_min_slope_pips = float(params.get("trend_min_slope_pips", 0.0))
         self.require_trend_for_buy = bool(params.get("require_trend_for_buy", True))
         self.require_trend_for_sell = bool(params.get("require_trend_for_sell", True))
+        self.early_exit_on_strategy_change = bool(params.get("early_exit_on_strategy_change", True))
+        self.early_exit_min_bars_in_trade = max(0, int(params.get("early_exit_min_bars_in_trade", 1)))
+        self.early_exit_only_when_adverse = bool(params.get("early_exit_only_when_adverse", True))
+        self.early_exit_loss_ratio = float(params.get("early_exit_loss_ratio", 0.30))
+        self.early_exit_near_sl_ratio = float(params.get("early_exit_near_sl_ratio", 0.70))
+        self.early_exit_on_opposite_choch = bool(params.get("early_exit_on_opposite_choch", True))
+        self.early_exit_on_trend_flip = bool(params.get("early_exit_on_trend_flip", True))
+        self.early_exit_on_session_invalid = bool(params.get("early_exit_on_session_invalid", False))
         risk = config.get("risk", {})
         self.stop_loss_pips = risk.get("stop_loss_pips", params.get("stop_loss_pips", 100.0))
 
@@ -126,6 +144,8 @@ class SMCScalper(StrategyBase):
         self._debug_eval_count = {}
         self._debug_last_marker = {}
         self._debug_last_ts = {}
+        self._bar_counter = {}
+        self._open_bar_by_ticket = {}
 
         # Initialize SMC analyzer
         symbol_for_point = self.symbols[0] if self.symbols else "XAUUSD"
@@ -140,6 +160,7 @@ class SMCScalper(StrategyBase):
     def analyze(self, symbol: str, data: pd.DataFrame) -> Optional[TradeSignal]:
         """Analyze market and generate trade signal."""
         self._debug_eval_count[symbol] = self._debug_eval_count.get(symbol, 0) + 1
+        self._bar_counter[symbol] = self._bar_counter.get(symbol, 0) + 1
 
         if self.smc is None:
             self._debug_log(symbol, data, "skip", "smc_not_initialized")
@@ -370,9 +391,76 @@ class SMCScalper(StrategyBase):
 
     def should_close(self, position: Position, data: pd.DataFrame) -> bool:
         """Check if position should be closed."""
-        # This strategy primarily uses SL/TP for exits
-        # Additional exit logic can be added here
+        # Default exits remain SL/TP. This early-exit block closes trades when
+        # setup regime changes against the original thesis before SL is reached.
+        if not self.early_exit_on_strategy_change or self.smc is None or len(data) < 3:
+            return False
+
+        is_buy = position.type == Signal.BUY
+        symbol = position.symbol
+        bar_idx = self._bar_counter.get(symbol, 0)
+        open_bar = self._open_bar_by_ticket.get(int(position.ticket))
+        bars_in_trade = (
+            (bar_idx - open_bar)
+            if open_bar is not None
+            else self.early_exit_min_bars_in_trade
+        )
+        if bars_in_trade < self.early_exit_min_bars_in_trade:
+            return False
+
+        reasons = []
+        if self.early_exit_on_session_invalid:
+            session_ok, session_reason = self._evaluate_session_window(data)
+            if not session_ok:
+                reasons.append(session_reason)
+
+        if self.early_exit_on_trend_flip and self.trend_filter_enabled:
+            trend_ok, trend_reason = self._evaluate_trend_alignment(symbol, data, is_buy=is_buy)
+            if not trend_ok:
+                reasons.append(f"trend_flip:{trend_reason}")
+
+        if self.early_exit_on_opposite_choch and len(data) >= self.choch_lookback:
+            if is_buy:
+                if self.smc.detect_bearish_choch(data, self.choch_lookback):
+                    reasons.append("opposite_choch_bearish")
+            else:
+                if self.smc.detect_bullish_choch(data, self.choch_lookback):
+                    reasons.append("opposite_choch_bullish")
+
+        if not reasons:
+            return False
+
+        if not self.early_exit_only_when_adverse:
+            self._debug_log(symbol, data, "early_exit", "|".join(reasons), force=True)
+            return True
+
+        stop_distance = abs(float(position.open_price) - float(position.stop_loss))
+        if stop_distance <= 0:
+            return False
+
+        current_price = float(data.iloc[-1]["close"])
+        if is_buy:
+            adverse = max(0.0, float(position.open_price) - current_price)
+        else:
+            adverse = max(0.0, current_price - float(position.open_price))
+
+        loss_ratio = adverse / stop_distance
+        if loss_ratio >= self.early_exit_loss_ratio or loss_ratio >= self.early_exit_near_sl_ratio:
+            self._debug_log(
+                symbol,
+                data,
+                "early_exit",
+                f"reasons={'|'.join(reasons)} loss_ratio={loss_ratio:.2f}",
+                force=True,
+            )
+            return True
         return False
+
+    def on_trade_opened(self, position: Position) -> None:
+        self._open_bar_by_ticket[int(position.ticket)] = self._bar_counter.get(position.symbol, 0)
+
+    def on_trade_closed(self, position: Position, profit: float) -> None:
+        self._open_bar_by_ticket.pop(int(position.ticket), None)
 
     def get_trailing_stop(self, position: Position, data: pd.DataFrame) -> Optional[float]:
         """Calculate trailing stop."""
