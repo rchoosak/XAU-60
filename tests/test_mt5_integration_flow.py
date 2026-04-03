@@ -67,7 +67,11 @@ class _FakeMT5API:
         )
 
     def terminal_info(self):
-        return SimpleNamespace(name="terminal")
+        return SimpleNamespace(
+            name="terminal",
+            trade_allowed=True,
+            tradeapi_disabled=False,
+        )
 
     def symbol_select(self, symbol, enabled):
         self.symbol_select_calls.append((symbol, enabled))
@@ -158,6 +162,32 @@ def test_mt5_connector_create_order_integration(monkeypatch):
     assert len(fake.order_requests) == 1
     assert fake.order_requests[0]["symbol"] == "XAUUSD"
     assert fake.order_requests[0]["type"] == fake.ORDER_TYPE_BUY
+
+
+def test_mt5_connector_blocks_order_when_autotrading_disabled(monkeypatch):
+    fake = _FakeMT5API()
+    fake.terminal_info = lambda: SimpleNamespace(
+        name="terminal",
+        trade_allowed=False,
+        tradeapi_disabled=False,
+    )
+    monkeypatch.setattr(mt5_connector_module, "mt5", fake)
+
+    connector = mt5_connector_module.MT5Connector()
+    ok, ticket = connector.place_market_order(
+        symbol="XAUUSD",
+        order_type=Signal.BUY,
+        volume=0.01,
+        stop_loss=1999.0,
+        take_profit=2002.0,
+        magic=1234,
+        comment="autotrading-disabled",
+        slippage=10,
+    )
+
+    assert ok is False
+    assert ticket == 0
+    assert fake.order_requests == []
 
 
 class _BotMT5Connector:

@@ -226,6 +226,49 @@ class MT5Connector:
         self._update_account_info()
         return self._account_info
 
+    def _preflight_trading_permissions(self) -> Optional[str]:
+        """
+        Check terminal/account permissions required for live order placement.
+
+        Returns:
+            Human-friendly error message when trading is blocked, otherwise None.
+        """
+        terminal_info = mt5.terminal_info()
+        if terminal_info is not None:
+            terminal_trade_allowed = getattr(terminal_info, "trade_allowed", None)
+            if terminal_trade_allowed is False:
+                return (
+                    "MT5 client AutoTrading is disabled (terminal_info.trade_allowed=False). "
+                    "Enable the MT5 toolbar 'Algo Trading' button and allow algorithmic "
+                    "trading in Tools > Options > Expert Advisors."
+                )
+
+            terminal_tradeapi_disabled = getattr(terminal_info, "tradeapi_disabled", None)
+            if terminal_tradeapi_disabled is True:
+                return (
+                    "MT5 terminal API trading is disabled (terminal_info.tradeapi_disabled=True). "
+                    "Enable algorithmic trading in MT5 terminal settings."
+                )
+
+        account_info = mt5.account_info()
+        if account_info is not None:
+            account_trade_allowed = getattr(account_info, "trade_allowed", None)
+            if account_trade_allowed is False:
+                return (
+                    "Account trading is disabled (account_info.trade_allowed=False). "
+                    "Check broker/session trading permissions."
+                )
+
+            account_trade_expert = getattr(account_info, "trade_expert", None)
+            if account_trade_expert is False:
+                return (
+                    "Expert Advisor trading is disabled for this account/session "
+                    "(account_info.trade_expert=False). Enable 'Allow algorithmic "
+                    "trading' and EA 'Allow live trading'."
+                )
+
+        return None
+
     def get_symbol_info(self, symbol: str) -> Optional[SymbolInfo]:
         """
         Get symbol information.
@@ -400,6 +443,11 @@ class MT5Connector:
         Returns:
             Tuple of (success, ticket_number)
         """
+        permission_error = self._preflight_trading_permissions()
+        if permission_error:
+            logger.error(f"Order blocked by preflight permission check: {permission_error}")
+            return False, 0
+
         tick = mt5.symbol_info_tick(symbol)
         if not tick:
             logger.error(f"Cannot get tick for {symbol}")
@@ -438,6 +486,13 @@ class MT5Connector:
             return False, 0
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
+            client_autotrading_disabled_code = getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)
+            if result.retcode == client_autotrading_disabled_code:
+                logger.error(
+                    "Order rejected by MT5 client (retcode 10027): AutoTrading is disabled. "
+                    "Enable MT5 toolbar 'Algo Trading', MT5 Options > Expert Advisors > "
+                    "'Allow algorithmic trading', and EA 'Allow live trading'."
+                )
             logger.error(f"Order failed: {result.comment} (code: {result.retcode})")
             return False, 0
 
