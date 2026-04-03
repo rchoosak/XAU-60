@@ -310,6 +310,7 @@ class TradingBot:
         # Load Strategies
         self.strategy_loader = StrategyLoader()
         self.strategy_loader.load_all_strategies()
+        self._inject_strategy_runtime_context()
 
         strategies = self.strategy_loader.get_enabled_strategies()
         logger.info(f"Loaded {len(strategies)} enabled strategies")
@@ -318,6 +319,37 @@ class TradingBot:
             logger.info(f"  - {strategy}")
 
         return True
+
+    def _inject_strategy_runtime_context(self) -> None:
+        """Provide runtime connectors to strategies that support context injection."""
+        if not self.strategy_loader:
+            return
+        strategy_map: Dict[str, Any] = {}
+        if hasattr(self.strategy_loader, "get_all_strategies"):
+            try:
+                strategy_map = self.strategy_loader.get_all_strategies() or {}
+            except Exception:
+                strategy_map = {}
+        if not strategy_map and hasattr(self.strategy_loader, "get_enabled_strategies"):
+            try:
+                strategy_map = self.strategy_loader.get_enabled_strategies() or {}
+            except Exception:
+                strategy_map = {}
+
+        for strategy in strategy_map.values():
+            if hasattr(strategy, "set_runtime_context"):
+                try:
+                    strategy.set_runtime_context(
+                        mt5_connector=self.mt5,
+                        trade_executor=self.trade_executor,
+                        risk_manager=self.risk_manager,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to inject runtime context into strategy {}: {}",
+                        getattr(strategy, "name", strategy.__class__.__name__),
+                        exc,
+                    )
 
     def run(self):
         """Run the main trading loop."""

@@ -23,8 +23,8 @@ data:
 #   # strategies: [smc_scalper, bollinger_reversion]
 
 simulation:
-  initial_balance: 20000.0
-  leverage: 100
+  initial_balance: 50000.0
+  leverage: 250
   point: 0.01
   digits: 2
   contract_size: 100.0

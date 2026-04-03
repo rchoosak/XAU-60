@@ -1025,6 +1025,8 @@ def _prepare_bot(
             strat.enabled = norm in selected_normalized
 
     bot.strategy_loader = loader
+    if hasattr(bot, "_inject_strategy_runtime_context"):
+        bot._inject_strategy_runtime_context()
 
     enabled = bot.strategy_loader.get_enabled_strategies()
     if not enabled:
