@@ -84,6 +84,13 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.tighten_after_profit_pips = 0.0
         self.trailing_pips_tight = 120.0
         self.lot_size = 0.0
+        self.reversal_exit_enabled = True
+        self.reversal_exit_min_bars_in_trade = 1
+        self.reversal_exit_loss_ratio = 0.45
+        self.reversal_exit_near_sl_ratio = 0.70
+        self.reversal_exit_anchor_flip_pips = 8.0
+        self.reversal_exit_require_trend_strength = False
+        self.reversal_exit_trend_adx_min = 22.0
 
         # Session filter
         self.use_time_filter = True
@@ -106,6 +113,7 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self._last_entry_price_by_side: Dict[str, Dict[Signal, float]] = {}
         self._daily_signal_date: Dict[str, date] = {}
         self._daily_signal_count: Dict[str, int] = {}
+        self._open_bar_by_ticket: Dict[int, int] = {}
 
     def initialize(self, config: Dict[str, Any]) -> None:
         self.config = config
@@ -161,6 +169,15 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self.tighten_after_profit_pips = float(risk.get("tighten_after_profit_pips", 0.0))
         self.trailing_pips_tight = float(risk.get("trailing_pips_tight", self.trailing_pips))
         self.lot_size = float(risk.get("lot_size", env_config.trading.default_lot_size))
+        self.reversal_exit_enabled = bool(risk.get("reversal_exit_enabled", True))
+        self.reversal_exit_min_bars_in_trade = max(0, int(risk.get("reversal_exit_min_bars_in_trade", 1)))
+        self.reversal_exit_loss_ratio = float(risk.get("reversal_exit_loss_ratio", 0.45))
+        self.reversal_exit_near_sl_ratio = float(risk.get("reversal_exit_near_sl_ratio", 0.70))
+        self.reversal_exit_anchor_flip_pips = float(risk.get("reversal_exit_anchor_flip_pips", 8.0))
+        self.reversal_exit_require_trend_strength = bool(
+            risk.get("reversal_exit_require_trend_strength", False)
+        )
+        self.reversal_exit_trend_adx_min = float(risk.get("reversal_exit_trend_adx_min", 22.0))
 
         session = config.get("session", {})
         self.use_time_filter = bool(session.get("use_time_filter", True))
@@ -192,6 +209,7 @@ class AdaptiveVolatilityGrid(StrategyBase):
         self._last_entry_price_by_side = {}
         self._daily_signal_date = {}
         self._daily_signal_count = {}
+        self._open_bar_by_ticket = {}
 
     def analyze(self, symbol: str, data: pd.DataFrame) -> Optional[TradeSignal]:
         required = max(self.atr_period, self.anchor_ema_period, self.trend_adx_period, self.rsi_period) + 2
@@ -301,7 +319,79 @@ class AdaptiveVolatilityGrid(StrategyBase):
         return trade_signal
 
     def should_close(self, position: Position, data: pd.DataFrame) -> bool:
+        if not self.reversal_exit_enabled:
+            return False
+
+        required = max(self.anchor_ema_period, self.trend_adx_period, self.rsi_period) + 2
+        if len(data) < required:
+            return False
+
+        open_bar = self._open_bar_by_ticket.get(int(position.ticket))
+        bar_idx = self._bar_counter.get(position.symbol, 0)
+        bars_in_trade = (
+            bar_idx - open_bar
+            if open_bar is not None
+            else self.reversal_exit_min_bars_in_trade
+        )
+        if bars_in_trade < self.reversal_exit_min_bars_in_trade:
+            return False
+
+        risk_distance = abs(float(position.open_price) - float(position.stop_loss))
+        if risk_distance <= 0:
+            return False
+
+        try:
+            anchor_series = calculate_ema(data, self.anchor_ema_period)
+            adx_series = calculate_adx(data, self.trend_adx_period)
+            rsi_series = calculate_rsi(data, self.rsi_period)
+        except Exception:
+            return False
+
+        anchor_now = float(anchor_series.iloc[-1])
+        anchor_prev = float(anchor_series.iloc[-2])
+        adx_now = float(adx_series.iloc[-1])
+        rsi_now = float(rsi_series.iloc[-1])
+        if (
+            pd.isna(anchor_now)
+            or pd.isna(anchor_prev)
+            or pd.isna(adx_now)
+            or pd.isna(rsi_now)
+        ):
+            return False
+
+        current_price = float(data.iloc[-1]["close"])
+        flip_buffer = self._pips_to_price(position.symbol, self.reversal_exit_anchor_flip_pips)
+
+        if position.type == Signal.BUY:
+            adverse = max(0.0, float(position.open_price) - current_price)
+            near_sl = current_price <= (float(position.stop_loss) + flip_buffer)
+            trend_flip = (
+                current_price < (anchor_now - flip_buffer)
+                and (anchor_now < anchor_prev or rsi_now < 50.0)
+            )
+        else:
+            adverse = max(0.0, current_price - float(position.open_price))
+            near_sl = current_price >= (float(position.stop_loss) - flip_buffer)
+            trend_flip = (
+                current_price > (anchor_now + flip_buffer)
+                and (anchor_now > anchor_prev or rsi_now > 50.0)
+            )
+
+        if self.reversal_exit_require_trend_strength and adx_now < self.reversal_exit_trend_adx_min:
+            trend_flip = False
+
+        loss_ratio = adverse / risk_distance
+        if trend_flip and loss_ratio >= self.reversal_exit_loss_ratio:
+            return True
+        if near_sl and loss_ratio >= self.reversal_exit_near_sl_ratio:
+            return True
         return False
+
+    def on_trade_opened(self, position: Position) -> None:
+        self._open_bar_by_ticket[int(position.ticket)] = self._bar_counter.get(position.symbol, 0)
+
+    def on_trade_closed(self, position: Position, profit: float) -> None:
+        self._open_bar_by_ticket.pop(int(position.ticket), None)
 
     def get_trailing_stop(self, position: Position, data: pd.DataFrame) -> Optional[float]:
         if not self.use_trailing_stop:

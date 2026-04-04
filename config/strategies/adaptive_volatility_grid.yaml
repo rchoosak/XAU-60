@@ -38,19 +38,21 @@ risk:
   sell_stop_loss_min_pips: 160.0
   sell_stop_loss_max_pips: 700.0
   sell_risk_reward: 1.8
+
   trailing_stop: true
   trailing_pips: 120.0
   trailing_start_pips: 100.0
   trailing_pips_wide: 200.0
   tighten_after_profit_pips: 500.0
   trailing_pips_tight: 80.0
-  # sell_risk_reward: 1.8
-  # trailing_stop: true
-  # trailing_pips: 120.0
-  # trailing_start_pips: 100.0
-  # trailing_pips_wide: 120.0
-  # tighten_after_profit_pips: 260.0
-  # trailing_pips_tight: 60.0
+
+  reversal_exit_enabled: false
+  reversal_exit_min_bars_in_trade: 1
+  reversal_exit_loss_ratio: 0.45
+  reversal_exit_near_sl_ratio: 0.70
+  reversal_exit_anchor_flip_pips: 8.0
+  reversal_exit_require_trend_strength: false
+  reversal_exit_trend_adx_min: 22.0
 
   max_risk_percent: 1.0
   lot_size: 0

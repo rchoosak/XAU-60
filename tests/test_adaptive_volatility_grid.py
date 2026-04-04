@@ -156,3 +156,41 @@ def test_adaptive_volatility_grid_trailing_two_stage():
 
     assert strategy.get_trailing_stop(pos, wide_data) == 2000.0
     assert strategy.get_trailing_stop(pos, tight_data) == 2036.0
+
+
+def test_adaptive_volatility_grid_should_close_on_reversal_before_sl(monkeypatch):
+    strategy = AdaptiveVolatilityGrid()
+    cfg = _base_config()
+    cfg["risk"]["reversal_exit_enabled"] = True
+    cfg["risk"]["reversal_exit_loss_ratio"] = 0.4
+    cfg["risk"]["reversal_exit_near_sl_ratio"] = 0.7
+    cfg["risk"]["reversal_exit_anchor_flip_pips"] = 5.0
+    strategy.initialize(cfg)
+
+    monkeypatch.setattr(
+        avg_mod,
+        "calculate_ema",
+        lambda data, period, column="close": pd.Series([2000.0] * (len(data) - 1) + [1998.0], index=data.index),
+    )
+    monkeypatch.setattr(avg_mod, "calculate_adx", lambda data, period: pd.Series([25.0] * len(data), index=data.index))
+    monkeypatch.setattr(avg_mod, "calculate_rsi", lambda data, period: pd.Series([45.0] * len(data), index=data.index))
+
+    strategy._bar_counter["XAUUSD"] = 100
+    strategy._open_bar_by_ticket[777] = 90
+
+    pos = Position(
+        ticket=777,
+        symbol="XAUUSD",
+        type=Signal.BUY,
+        volume=0.01,
+        open_price=2000.0,
+        stop_loss=1990.0,
+        take_profit=2020.0,
+        profit=-6.0,
+        magic_number=789777,
+        comment="",
+        open_time=datetime(2026, 1, 1),
+    )
+    data = _sample_data(last_close=1994.0, last_time=datetime(2026, 1, 1, 3, 0))
+
+    assert strategy.should_close(pos, data) is True
