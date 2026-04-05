@@ -49,7 +49,8 @@ class TradeExecutor:
         risk_manager: RiskManager,
         default_magic: int = 123456,
         default_lot_size: float = 0.01,
-        slippage: int = 10
+        slippage: int = 10,
+        min_rr: float = 1.0
     ):
         """
         Initialize trade executor.
@@ -60,12 +61,14 @@ class TradeExecutor:
             default_magic: Default magic number for orders
             default_lot_size: Default lot size from .env (fallback)
             slippage: Maximum slippage in points from .env
+            min_rr: Minimum risk/reward ratio required for signals
         """
         self.mt5 = mt5
         self.risk_manager = risk_manager
         self.default_magic = default_magic
         self.default_lot_size = default_lot_size
         self.slippage = slippage
+        self.min_rr = min_rr
 
         self._trade_history: List[TradeRecord] = []
         self._active_trades: Dict[int, TradeRecord] = {}
@@ -90,6 +93,11 @@ class TradeExecutor:
             Ticket number if successful, None otherwise
         """
         if signal.signal == Signal.HOLD:
+            return None
+
+        # Validate signal meets minimum risk/reward
+        if not signal.validate(self.min_rr):
+            self._warn_throttled("invalid_rr", f"Signal RR below minimum ({self.min_rr}): {signal.risk_reward_ratio}", cooldown_seconds=15.0)
             return None
 
         # Check if we can open a trade
@@ -193,301 +201,3 @@ class TradeExecutor:
                 "magic_number": magic,
                 "comment": signal.comment,
                 "reason": "Signal execution",
-                "open_time": record.open_time,
-                "risk_percent": risk_percent,
-                "capital_base": capital_base,
-                "context": context,
-            })
-            return ticket
-
-        return None
-
-    def close_trade(self, ticket: int, reason: str = "Manual close") -> bool:
-        """
-        Close a trade by ticket number.
-
-        Args:
-            ticket: Position ticket to close
-            reason: Reason for closing
-
-        Returns:
-            True if closed successfully
-        """
-        # Get position info before closing
-        positions = self.mt5.get_positions()
-        position = next((p for p in positions if p.ticket == ticket), None)
-
-        if not position:
-            logger.warning(f"Position {ticket} not found")
-            return False
-
-        # Close the position
-        close_time = self._current_market_time(position.symbol)
-        success = self.mt5.close_position(ticket)
-
-        if success:
-            # Update trade record
-            if ticket in self._active_trades:
-                record = self._active_trades.pop(ticket)
-                record.close_time = close_time
-                tick = self.mt5.get_tick(position.symbol)
-                if tick:
-                    if position.type == Signal.BUY:
-                        record.close_price = tick.get("bid", position.open_price)
-                    else:
-                        record.close_price = tick.get("ask", position.open_price)
-                else:
-                    record.close_price = position.open_price
-                record.profit = position.profit
-                record.status = "CLOSED"
-                self._trade_history.append(record)
-
-                # Record for risk manager
-                self.risk_manager.record_trade_result(position.profit)
-                append_trade_event({
-                    "mode": self._journal_mode(),
-                    "event": "CLOSE",
-                    "ticket": ticket,
-                    "symbol": record.symbol,
-                    "strategy": record.strategy or "unknown",
-                    "side": record.signal.name,
-                    "entry_price": record.entry_price,
-                    "exit_price": record.close_price,
-                    "stop_loss": record.stop_loss,
-                    "take_profit": record.take_profit,
-                    "lot_size": record.lot_size,
-                    "profit": record.profit,
-                    "reason": reason,
-                    "open_time": record.open_time,
-                    "close_time": record.close_time,
-                    "duration_minutes": (
-                        (record.close_time - record.open_time).total_seconds() / 60.0
-                        if record.close_time and record.open_time
-                        else None
-                    ),
-                    "entry_context": record.context,
-                })
-
-            logger.info(f"Trade closed: {ticket} | Reason: {reason} | P&L: {position.profit}")
-            return True
-
-        return False
-
-    def close_all_trades(self, symbol: Optional[str] = None, reason: str = "Close all") -> int:
-        """
-        Close all open trades.
-
-        Args:
-            symbol: Only close trades for this symbol (optional)
-            reason: Reason for closing
-
-        Returns:
-            Number of trades closed
-        """
-        positions = self.mt5.get_positions(symbol=symbol)
-        closed = 0
-
-        for position in positions:
-            if self.close_trade(position.ticket, reason):
-                closed += 1
-
-        logger.info(f"Closed {closed} trades")
-        return closed
-
-    def update_trailing_stop(
-        self,
-        ticket: int,
-        new_stop_loss: float
-    ) -> bool:
-        """
-        Update trailing stop for a position.
-
-        Args:
-            ticket: Position ticket
-            new_stop_loss: New stop loss price
-
-        Returns:
-            True if updated successfully
-        """
-        positions = self.mt5.get_positions()
-        position = next((p for p in positions if p.ticket == ticket), None)
-
-        if not position:
-            return False
-
-        # Validate new stop loss
-        if position.type == Signal.BUY:
-            # For buy, new SL should be higher than current and below current price
-            if new_stop_loss <= position.stop_loss:
-                return False  # Not trailing up
-        else:
-            # For sell, new SL should be lower than current and above current price
-            if new_stop_loss >= position.stop_loss:
-                return False  # Not trailing down
-
-        success = self.mt5.modify_position(ticket, stop_loss=new_stop_loss)
-
-        if success:
-            # Update active trade record
-            if ticket in self._active_trades:
-                self._active_trades[ticket].stop_loss = new_stop_loss
-
-            logger.debug(f"Trailing stop updated: {ticket} -> SL: {new_stop_loss}")
-
-        return success
-
-    def manage_positions(self, strategies: Dict[str, Any]) -> None:
-        """
-        Manage all open positions (trailing stops, exit conditions).
-
-        Args:
-            strategies: Dictionary of active strategies
-        """
-        positions = self.mt5.get_positions()
-
-        for position in positions:
-            # Find the strategy that opened this trade
-            strategy = None
-            for strat in strategies.values():
-                if hasattr(strat, 'magic_number') and position.magic_number == strat.magic_number:
-                    strategy = strat
-                    break
-
-            if not strategy:
-                continue
-
-            # Get current market data
-            data = self.mt5.get_ohlcv(position.symbol, strategy.timeframe, 100)
-            if data is None:
-                continue
-
-            # Check exit conditions
-            if strategy.should_close(position, data):
-                self.close_trade(position.ticket, "Strategy exit signal")
-                continue
-
-            # Check trailing stop
-            new_sl = strategy.get_trailing_stop(position, data)
-            if new_sl:
-                self.update_trailing_stop(position.ticket, new_sl)
-
-    def _calculate_sl_pips(
-        self,
-        symbol: str,
-        entry_price: float,
-        stop_loss: float
-    ) -> float:
-        """Calculate stop loss distance in pips."""
-        symbol_info = self.mt5.get_symbol_info(symbol)
-        if not symbol_info:
-            return 0.0
-
-        point = symbol_info.point
-        pip_factor = 10  # Standard pip = 10 points
-
-        return abs(entry_price - stop_loss) / (point * pip_factor)
-
-    def get_active_trades(self) -> Dict[int, TradeRecord]:
-        """Get all active trade records."""
-        return self._active_trades.copy()
-
-    def get_trade_history(self) -> List[TradeRecord]:
-        """Get trade history."""
-        return self._trade_history.copy()
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """
-        Get trading statistics.
-
-        Returns:
-            Dictionary with trade statistics
-        """
-        history = self._trade_history
-
-        if not history:
-            return {
-                "total_trades": 0,
-                "winning_trades": 0,
-                "losing_trades": 0,
-                "win_rate": 0,
-                "total_profit": 0,
-                "average_profit": 0,
-                "average_loss": 0,
-                "profit_factor": 0,
-            }
-
-        winning = [t for t in history if t.profit and t.profit > 0]
-        losing = [t for t in history if t.profit and t.profit < 0]
-
-        total_profit = sum(t.profit for t in history if t.profit)
-        gross_profit = sum(t.profit for t in winning) if winning else 0
-        gross_loss = abs(sum(t.profit for t in losing)) if losing else 0
-
-        return {
-            "total_trades": len(history),
-            "winning_trades": len(winning),
-            "losing_trades": len(losing),
-            "win_rate": len(winning) / len(history) * 100 if history else 0,
-            "total_profit": total_profit,
-            "average_profit": gross_profit / len(winning) if winning else 0,
-            "average_loss": gross_loss / len(losing) if losing else 0,
-            "profit_factor": gross_profit / gross_loss if gross_loss > 0 else 0,
-            "active_trades": len(self._active_trades),
-        }
-
-    @staticmethod
-    def _sanitize_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Keep only JSON-serializable scalar fields for journaling."""
-        if not isinstance(context, dict):
-            return {}
-        sanitized: Dict[str, Any] = {}
-        for key, value in context.items():
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                sanitized[str(key)] = value
-        return sanitized
-
-    def _journal_mode(self) -> str:
-        backend = str(getattr(self.mt5, "backend_mode", "")).strip().lower()
-        if backend in {"replay", "backtest"}:
-            return "backtest"
-        return "live"
-
-    def _current_market_time(self, symbol: str = "") -> datetime:
-        # 1) Prefer tick timestamp when available.
-        if symbol:
-            try:
-                tick = self.mt5.get_tick(symbol)
-            except Exception:
-                tick = None
-            tick_time = tick.get("time") if isinstance(tick, dict) else None
-            dt = self._coerce_datetime(tick_time)
-            if dt is not None:
-                return dt
-
-        # 2) Replay connector exposes current_time directly.
-        dt = self._coerce_datetime(getattr(self.mt5, "current_time", None))
-        if dt is not None:
-            return dt
-
-        # 3) Fallback to wall clock.
-        return datetime.now()
-
-    @staticmethod
-    def _coerce_datetime(value: Any) -> Optional[datetime]:
-        if isinstance(value, datetime):
-            return value
-        if hasattr(value, "to_pydatetime"):
-            try:
-                return value.to_pydatetime()
-            except Exception:
-                return None
-        return None
-
-    def _warn_throttled(self, key: str, message: str, cooldown_seconds: float = 10.0) -> None:
-        now = time.time()
-        last_ts = self._warning_last_ts.get(key, 0.0)
-        last_msg = self._warning_last_msg.get(key)
-        if last_msg != message or (now - last_ts) >= cooldown_seconds:
-            logger.warning(message)
-            self._warning_last_ts[key] = now
-            self._warning_last_msg[key] = message

@@ -37,6 +37,13 @@ class TradeSignal:
         reward = abs(self.take_profit - self.entry_price)
         return reward / risk if risk > 0 else 0.0
 
+    def validate(self, min_rr: float = 1.0) -> bool:
+        """Validate signal meets minimum risk/reward threshold."""
+        if self.signal == Signal.HOLD:
+            return False
+        rr = self.risk_reward_ratio
+        return rr >= min_rr
+
 
 @dataclass
 class Position:
