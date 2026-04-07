@@ -112,6 +112,7 @@ class TradingBot:
         self._loss_streak: Dict[str, int] = {}
         self._loss_streak_day: Dict[str, str] = {}
         self._cooldown_bars_left: Dict[str, int] = {}
+        self._feed_logging_warned = False
 
         self._setup_signal_handlers()
 
@@ -317,9 +318,18 @@ class TradingBot:
 
         for name, strategy in strategies.items():
             logger.info(f"  - {strategy}")
-        self._log_feed_snapshot_on_connect(strategies)
+        if self._feed_logging_config().get("snapshot_on_connect", True):
+            self._log_feed_snapshot_on_connect(strategies)
 
         return True
+
+    def _feed_logging_config(self) -> Dict[str, Any]:
+        """Resolve feed logging options from config/logging section."""
+        log_cfg = self.config.get("logging", {}) if isinstance(self.config, dict) else {}
+        return {
+            "snapshot_on_connect": bool(log_cfg.get("feed_snapshot_on_connect", True)),
+            "live_on_new_bar": bool(log_cfg.get("feed_live_on_new_bar", True)),
+        }
 
     def _log_feed_snapshot_on_connect(self, strategies: Dict[str, Any]) -> None:
         """Log one-shot market feed snapshot after MT5 connection is ready."""
@@ -330,18 +340,11 @@ class TradingBot:
             return
 
         logger.info("MT5 feed snapshot after successful connection")
-        seen_symbol_tf: set[Tuple[str, str]] = set()
-
         for strategy_name, strategy in strategies.items():
             symbols = list(getattr(strategy, "symbols", []) or [])
             timeframe = str(getattr(strategy, "timeframe", "M1") or "M1")
 
             for symbol in symbols:
-                key = (str(symbol), timeframe.upper())
-                if key in seen_symbol_tf:
-                    continue
-                seen_symbol_tf.add(key)
-
                 bid = ask = last = spread_points = None
                 bar_time = None
                 o = h = l = c = v = None
@@ -409,6 +412,60 @@ class TradingBot:
                     f"{c:.5f}" if c is not None else "n/a",
                     f"{v:.0f}" if v is not None else "n/a",
                 )
+
+    def _log_live_feed_update(self, strategy_name: str, strategy: Any, symbol: str, data: Any) -> None:
+        """Log feed update once per analyzed new bar in live mode."""
+        if not self.mt5 or data is None or getattr(data, "empty", True):
+            return
+
+        bar = data.iloc[-1]
+        timeframe = str(getattr(strategy, "timeframe", "M1") or "M1")
+        bar_time = self._extract_datetime(bar.get("time")) or bar.get("time")
+
+        tick = {}
+        try:
+            tick = self.mt5.get_tick(symbol) or {}
+        except Exception as exc:
+            if not self._feed_logging_warned:
+                logger.warning("Live feed logging tick failed once: {}", exc)
+                self._feed_logging_warned = True
+
+        bid = self._as_float(tick.get("bid")) if isinstance(tick, dict) else None
+        ask = self._as_float(tick.get("ask")) if isinstance(tick, dict) else None
+        last = self._as_float(tick.get("last")) if isinstance(tick, dict) else None
+        spread_points = None
+
+        try:
+            symbol_info = self.mt5.get_symbol_info(symbol)
+        except Exception:
+            symbol_info = None
+        point = float(getattr(symbol_info, "point", 0.0) or 0.0)
+        if bid is not None and ask is not None and point > 0:
+            spread_points = (ask - bid) / point
+
+        o = self._as_float(bar.get("open"))
+        h = self._as_float(bar.get("high"))
+        l = self._as_float(bar.get("low"))
+        c = self._as_float(bar.get("close"))
+        v = self._as_float(bar.get("volume"))
+
+        logger.info(
+            "Feed update | strategy={} symbol={} tf={} | bar(time={}, O={}, H={}, L={}, C={}, V={}) "
+            "| tick(bid={}, ask={}, last={}, spread_pts={})",
+            strategy_name,
+            symbol,
+            timeframe,
+            bar_time.isoformat() if hasattr(bar_time, "isoformat") else str(bar_time or "n/a"),
+            f"{o:.5f}" if o is not None else "n/a",
+            f"{h:.5f}" if h is not None else "n/a",
+            f"{l:.5f}" if l is not None else "n/a",
+            f"{c:.5f}" if c is not None else "n/a",
+            f"{v:.0f}" if v is not None else "n/a",
+            f"{bid:.5f}" if bid is not None else "n/a",
+            f"{ask:.5f}" if ask is not None else "n/a",
+            f"{last:.5f}" if last is not None else "n/a",
+            f"{spread_points:.1f}" if spread_points is not None else "n/a",
+        )
 
     def _inject_strategy_runtime_context(self) -> None:
         """Provide runtime connectors to strategies that support context injection."""
@@ -492,6 +549,11 @@ class TradingBot:
                     self._last_analyzed_bar[bar_key] = bar_time
                     bar_processed = True
                     self._reset_loss_streak_if_new_day(state_key, bar_time)
+                    if (
+                        self._runtime_mode() == "live"
+                        and self._feed_logging_config().get("live_on_new_bar", True)
+                    ):
+                        self._log_live_feed_update(name, strategy, symbol, data)
 
                     # Analyze for signals
                     signal_obj = strategy.analyze(symbol, data)

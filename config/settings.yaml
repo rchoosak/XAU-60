@@ -49,6 +49,9 @@ alerts:
 # -------
 logging:
   level: INFO  # DEBUG, INFO, WARNING, ERROR
+  feed_snapshot_on_connect: true
+  feed_live_on_new_bar: true
+  console: true
   file: logs/trading_bot.log
   rotation: "10 MB"
   retention: "7 days"
