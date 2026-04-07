@@ -317,8 +317,98 @@ class TradingBot:
 
         for name, strategy in strategies.items():
             logger.info(f"  - {strategy}")
+        self._log_feed_snapshot_on_connect(strategies)
 
         return True
+
+    def _log_feed_snapshot_on_connect(self, strategies: Dict[str, Any]) -> None:
+        """Log one-shot market feed snapshot after MT5 connection is ready."""
+        if not self.mt5:
+            return
+        if not isinstance(strategies, dict) or not strategies:
+            logger.warning("Feed snapshot skipped: no enabled strategies")
+            return
+
+        logger.info("MT5 feed snapshot after successful connection")
+        seen_symbol_tf: set[Tuple[str, str]] = set()
+
+        for strategy_name, strategy in strategies.items():
+            symbols = list(getattr(strategy, "symbols", []) or [])
+            timeframe = str(getattr(strategy, "timeframe", "M1") or "M1")
+
+            for symbol in symbols:
+                key = (str(symbol), timeframe.upper())
+                if key in seen_symbol_tf:
+                    continue
+                seen_symbol_tf.add(key)
+
+                bid = ask = last = spread_points = None
+                bar_time = None
+                o = h = l = c = v = None
+
+                try:
+                    tick = self.mt5.get_tick(symbol) or {}
+                except Exception as exc:
+                    tick = {}
+                    logger.warning(
+                        "Feed snapshot tick failed | strategy={} symbol={} tf={} error={}",
+                        strategy_name,
+                        symbol,
+                        timeframe,
+                        exc,
+                    )
+
+                if isinstance(tick, dict):
+                    bid = self._as_float(tick.get("bid"))
+                    ask = self._as_float(tick.get("ask"))
+                    last = self._as_float(tick.get("last"))
+
+                try:
+                    symbol_info = self.mt5.get_symbol_info(symbol)
+                except Exception:
+                    symbol_info = None
+                point = float(getattr(symbol_info, "point", 0.0) or 0.0)
+                if bid is not None and ask is not None and point > 0:
+                    spread_points = (ask - bid) / point
+
+                try:
+                    bars = self.mt5.get_ohlcv(symbol, timeframe, 3)
+                except Exception as exc:
+                    bars = None
+                    logger.warning(
+                        "Feed snapshot OHLCV failed | strategy={} symbol={} tf={} error={}",
+                        strategy_name,
+                        symbol,
+                        timeframe,
+                        exc,
+                    )
+
+                if bars is not None and not bars.empty:
+                    bar = bars.iloc[-1]
+                    bar_time = self._extract_datetime(bar.get("time")) or bar.get("time")
+                    o = self._as_float(bar.get("open"))
+                    h = self._as_float(bar.get("high"))
+                    l = self._as_float(bar.get("low"))
+                    c = self._as_float(bar.get("close"))
+                    v = self._as_float(bar.get("volume"))
+
+                logger.info(
+                    "Feed data | strategy={} symbol={} tf={} | tick(bid={}, ask={}, last={}, spread_pts={}) "
+                    "| last_bar(time={}, O={}, H={}, L={}, C={}, V={})",
+                    strategy_name,
+                    symbol,
+                    timeframe,
+                    f"{bid:.5f}" if bid is not None else "n/a",
+                    f"{ask:.5f}" if ask is not None else "n/a",
+                    f"{last:.5f}" if last is not None else "n/a",
+                    f"{spread_points:.1f}" if spread_points is not None else "n/a",
+                    bar_time.isoformat() if hasattr(bar_time, "isoformat") else str(bar_time or "n/a"),
+                    f"{o:.5f}" if o is not None else "n/a",
+                    f"{h:.5f}" if h is not None else "n/a",
+                    f"{l:.5f}" if l is not None else "n/a",
+                    f"{c:.5f}" if c is not None else "n/a",
+                    f"{v:.0f}" if v is not None else "n/a",
+                )
 
     def _inject_strategy_runtime_context(self) -> None:
         """Provide runtime connectors to strategies that support context injection."""
