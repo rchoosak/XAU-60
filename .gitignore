@@ -26,6 +26,8 @@ wheels/
 .installed.cfg
 *.egg
 
+autogen_xau60/
+
 # Virtual environments
 venv/
 ENV/
